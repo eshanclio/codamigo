@@ -1,0 +1,8 @@
+name: codamigo
+version: "1.0.0"
+settings:
+  maxChunkSize: 1500
+  minChunkSize: 50
+databases:
+  - host: localhost
+    port: 5432

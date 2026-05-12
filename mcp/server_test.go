@@ -1,0 +1,630 @@
+package mcp_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"testing"
+
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/ieshan/codamigo/mcp"
+	"github.com/ieshan/codamigo/query"
+	"github.com/ieshan/codamigo/store"
+)
+
+func TestNewServer_NilDependencies(t *testing.T) {
+	s := mcp.NewServer(nil, nil, nil, nil)
+	if s == nil {
+		t.Fatal("NewServer returned nil")
+	}
+}
+
+type fakeEmbedder struct {
+	vec []float32
+}
+
+func (f *fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	return f.vec, nil
+}
+
+func (f *fakeEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	result := make([][]float32, len(texts))
+	for i := range texts {
+		result[i] = f.vec
+	}
+	return result, nil
+}
+
+func setupTestServer(t *testing.T) *mcp.Server {
+	t.Helper()
+	dim := 3
+	dbPath := t.TempDir() + "/test.db"
+	s, err := store.NewSQLiteStore(dbPath, "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	records := []store.Record{
+		{
+			ID: "r1", FilePath: "src/main.go", Language: "go",
+			Content: "func main() {}", ContentHash: "h1", NodeKind: "function",
+			Name: "main", StartLine: 1, EndLine: 3,
+			Embedding: []float32{1, 0, 0},
+		},
+		{
+			ID: "r2", FilePath: "src/utils/helper.go", Language: "go",
+			Content: "func helper() int { return 42 }", ContentHash: "h2", NodeKind: "function",
+			Name: "helper", StartLine: 1, EndLine: 5,
+			Embedding: []float32{0, 1, 0},
+		},
+	}
+	if err := s.Upsert(ctx, records); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
+	q := query.New(emb, s)
+	return mcp.NewServer(q, nil, nil, []string{"markdown", "yaml", "json"})
+}
+
+func makeSearchRequest(args map[string]any) mcpgo.CallToolRequest {
+	return mcpgo.CallToolRequest{
+		Params: mcpgo.CallToolParams{
+			Name:      "search",
+			Arguments: args,
+		},
+	}
+}
+
+func TestHandleSearch_BasicQuery(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query": "main function",
+		"limit": float64(10),
+	}))
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+
+	text := result.Content[0].(mcpgo.TextContent).Text
+	var resp struct {
+		Results   []query.Result `json:"results"`
+		Truncated bool           `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("unmarshal results: %v", err)
+	}
+	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if resp.Truncated {
+		t.Error("expected Truncated=false for unlimited search")
+	}
+}
+
+func TestHandleSearch_MissingQuery(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{}))
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result for missing query")
+	}
+}
+
+func TestHandleSearch_NoQuerier(t *testing.T) {
+	srv := mcp.NewServer(nil, nil, nil, nil)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query": "test",
+	}))
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error result when no querier configured")
+	}
+}
+
+func makeMapRequest(args map[string]any) mcpgo.CallToolRequest {
+	return mcpgo.CallToolRequest{
+		Params: mcpgo.CallToolParams{
+			Name:      "get_map",
+			Arguments: args,
+		},
+	}
+}
+
+func TestHandleMap_BasicOutput(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	if err != nil {
+		t.Fatalf("handleMap: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %v", result.Content)
+	}
+
+	text := result.Content[0].(mcpgo.TextContent).Text
+	if text == "" {
+		t.Fatal("expected non-empty map output")
+	}
+	if !strings.Contains(text, "# package:") {
+		t.Error("expected package header in map output")
+	}
+}
+
+func TestHandleMap_DefaultMaxTokens(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	if err != nil {
+		t.Fatalf("handleMap: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %v", result.Content)
+	}
+	text := result.Content[0].(mcpgo.TextContent).Text
+	if strings.Contains(text, "truncated") {
+		t.Error("small test data should not be truncated at default budget")
+	}
+}
+
+func TestHandleMap_NoQuerier(t *testing.T) {
+	srv := mcp.NewServer(nil, nil, nil, nil)
+	ctx := context.Background()
+
+	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	if err != nil {
+		t.Fatalf("handleMap: %v", err)
+	}
+	if !result.IsError {
+		t.Error("expected error when no querier configured")
+	}
+}
+
+func TestHandleSearch_MaxTokens(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":      "function",
+		"limit":      float64(10),
+		"max_tokens": float64(1),
+	}))
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %v", result.Content)
+	}
+
+	text := result.Content[0].(mcpgo.TextContent).Text
+	var resp struct {
+		Results   []query.Result `json:"results"`
+		Truncated bool           `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Results) == 0 {
+		t.Error("expected at least one result even with tiny budget")
+	}
+}
+
+// setupTestServerWithRecords creates a server seeded with n records so that
+// limit-clamping tests can observe non-empty result sets.
+func setupTestServerWithRecords(t *testing.T, n int) *mcp.Server {
+	t.Helper()
+	dim := 3
+	dbPath := t.TempDir() + "/test.db"
+	st, err := store.NewSQLiteStore(dbPath, "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	records := make([]store.Record, n)
+	for i := range n {
+		records[i] = store.Record{
+			ID:          fmt.Sprintf("r%d", i),
+			FilePath:    fmt.Sprintf("src/file%d.go", i),
+			Language:    "go",
+			Content:     fmt.Sprintf("func fn%d() {}", i),
+			ContentHash: fmt.Sprintf("h%d", i),
+			NodeKind:    "function",
+			Name:        fmt.Sprintf("fn%d", i),
+			StartLine:   1,
+			EndLine:     3,
+			// All embeddings point in the same direction so every record
+			// is a near-match for the fakeEmbedder vector {1, 0, 0}.
+			Embedding: []float32{1, 0, 0},
+		}
+	}
+	ctx := context.Background()
+	if err := st.Upsert(ctx, records); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
+	q := query.New(emb, st)
+	return mcp.NewServer(q, nil, nil, []string{"markdown", "yaml", "json"})
+}
+
+func TestHandleSearch_LimitClamping(t *testing.T) {
+	// Seed more records than the maximum allowed limit (100) so that an
+	// unclamped request would actually return more than 100 results.
+	srv := setupTestServerWithRecords(t, 150)
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		limit   any
+		wantMax int
+	}{
+		{"negative", float64(-5), 10},    // clamped to default 10
+		{"zero", float64(0), 10},         // clamped to default 10
+		{"valid", float64(20), 20},       // respected as-is
+		{"above_max", float64(500), 100}, // clamped to hard max 100
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+				"query": "function",
+				"limit": tc.limit,
+			}))
+			if err != nil {
+				t.Fatalf("HandleSearch: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("unexpected error result: %v", result.Content)
+			}
+			text := result.Content[0].(mcpgo.TextContent).Text
+			var resp struct {
+				Results []query.Result `json:"results"`
+			}
+			if err := json.Unmarshal([]byte(text), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if len(resp.Results) > tc.wantMax {
+				t.Errorf("limit=%v: got %d results, want <= %d (clamping failed)",
+					tc.limit, len(resp.Results), tc.wantMax)
+			}
+		})
+	}
+}
+
+func TestHandleSearch_NegativeOffsetAndMaxTokens(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":      "function",
+		"limit":      float64(10),
+		"offset":     float64(-3),
+		"max_tokens": float64(-100),
+	}))
+	if err != nil {
+		t.Fatalf("HandleSearch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+}
+
+func TestHandleSearch_RefreshCooldown(t *testing.T) {
+	// Build a server with a mock indexer that counts how many times Index is called.
+	dim := 3
+	dbPath := t.TempDir() + "/cooldown.db"
+	st, err := store.NewSQLiteStore(dbPath, "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
+	q := query.New(emb, st)
+
+	calls := 0
+	mock := &mockIndexer{indexFn: func(_ context.Context) error {
+		calls++
+		return nil
+	}}
+
+	srv := mcp.NewServerWithIndexer(q, mock, nil, nil)
+	ctx := context.Background()
+
+	// First call — cooldown not yet set; indexer should be called.
+	_, err = srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":         "function",
+		"refresh_index": true,
+	}))
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected indexer called once after first refresh, got %d", calls)
+	}
+
+	// Immediately call again — still within cooldown; indexer must NOT be called.
+	_, err = srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":         "function",
+		"refresh_index": true,
+	}))
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected indexer still called once (cooldown), got %d", calls)
+	}
+}
+
+// mockIndexer is a test double for the Indexer interface used by the MCP server.
+type mockIndexer struct {
+	indexFn func(ctx context.Context) error
+}
+
+func (m *mockIndexer) Index(ctx context.Context) error {
+	return m.indexFn(ctx)
+}
+
+func (m *mockIndexer) IndexFiles(_ context.Context, _ []string) error { return nil }
+
+func TestHandleSearch_PackageFilter(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":   "function",
+		"limit":   float64(10),
+		"package": "src/utils",
+	}))
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %v", result.Content)
+	}
+
+	text := result.Content[0].(mcpgo.TextContent).Text
+	var resp struct {
+		Results   []query.Result `json:"results"`
+		Truncated bool           `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Verify filtering actually worked: every returned result must be within
+	// the requested package directory, and src/main.go must be excluded.
+	for _, r := range resp.Results {
+		if r.FilePath == "src/main.go" {
+			t.Error("package filter should exclude src/main.go")
+		}
+		if !strings.HasPrefix(r.FilePath, "src/utils") {
+			t.Errorf("package filter returned result outside src/utils: %s", r.FilePath)
+		}
+	}
+	// The only record in src/utils is helper.go; expect exactly one result.
+	if len(resp.Results) != 1 {
+		t.Errorf("expected 1 result for package src/utils, got %d", len(resp.Results))
+	}
+}
+
+func TestHandleSearch_MetadataOnly(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":         "function",
+		"limit":         float64(10),
+		"metadata_only": true,
+	}))
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+
+	text := result.Content[0].(mcpgo.TextContent).Text
+	if text == "" {
+		t.Fatal("expected non-empty metadata_only response")
+	}
+
+	// metadata_only must not return JSON.
+	if strings.HasPrefix(strings.TrimSpace(text), "{") {
+		t.Error("metadata_only response should be plain text, not JSON")
+	}
+
+	// Each line must follow the format: "file:line  name                 nodekind"
+	// (server.go: fmt.Fprintf(&b, "%s:%d  %-20s %s\n", r.FilePath, r.StartLine, r.Name, r.NodeKind))
+	// Verify the two seeded records appear with correct filepath:line references.
+	if !strings.Contains(text, "src/main.go:1") {
+		t.Error("metadata_only response should contain 'src/main.go:1'")
+	}
+	if !strings.Contains(text, "src/utils/helper.go:1") {
+		t.Error("metadata_only response should contain 'src/utils/helper.go:1'")
+	}
+
+	// Node kind must be present; source content must be absent.
+	if !strings.Contains(text, "function") {
+		t.Error("metadata_only response should contain node kind 'function'")
+	}
+	if strings.Contains(text, "func main()") || strings.Contains(text, "func helper()") {
+		t.Error("metadata_only response must not contain source content")
+	}
+}
+
+func TestHandleSearch_PackagePathTraversal(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":   "test",
+		"package": "../../../etc",
+	}))
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error for path traversal in package parameter, got success")
+	}
+	// Error message should mention ".." so callers understand the rejection.
+	text := result.Content[0].(mcpgo.TextContent).Text
+	if !strings.Contains(text, "..") {
+		t.Errorf("error message should mention '..', got: %s", text)
+	}
+
+	// Test the filepath.Clean bypass pattern: no ".." substring but resolves outside root.
+	result2, err2 := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":   "test",
+		"package": "store/./../../etc",
+	}))
+	if err2 != nil {
+		t.Fatalf("handleSearch: %v", err2)
+	}
+	if !result2.IsError {
+		t.Fatal("expected error for filepath.Clean bypass pattern, got success")
+	}
+
+	// "store/.." cleans to "." which would match everything via "./**" glob.
+	result3, err3 := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":   "test",
+		"package": "store/..",
+	}))
+	if err3 != nil {
+		t.Fatalf("handleSearch: %v", err3)
+	}
+	if !result3.IsError {
+		t.Fatal("expected error for package 'store/..' (cleans to '.'), got success")
+	}
+
+	// Bare "." should also be rejected.
+	result4, err4 := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+		"query":   "test",
+		"package": ".",
+	}))
+	if err4 != nil {
+		t.Fatalf("handleSearch: %v", err4)
+	}
+	if !result4.IsError {
+		t.Fatal("expected error for package '.', got success")
+	}
+}
+
+func TestHandleSearch_UnsupportedDoubleStarGlob(t *testing.T) {
+	srv := setupTestServer(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"mid-pattern double star", "src/**/test.go", true},
+		{"leading double star", "**/foo.go", true},
+		{"trailing dir slash ok", "src/**", false},
+		{"trailing dir glob ok", "src/utils/**", false},
+		{"single star ok", "src/*.go", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
+				"query": "function",
+				"limit": float64(10),
+				"paths": []any{tc.path},
+			}))
+			if err != nil {
+				t.Fatalf("HandleSearch: %v", err)
+			}
+			if tc.wantErr && !result.IsError {
+				t.Errorf("expected error for path %q, got success", tc.path)
+			}
+			if !tc.wantErr && result.IsError {
+				t.Errorf("unexpected error for path %q: %v", tc.path, result.Content)
+			}
+		})
+	}
+}
+
+func setupTestServerWithMarkdown(t *testing.T) *mcp.Server {
+	t.Helper()
+	dim := 3
+	dbPath := t.TempDir() + "/test.db"
+	s, err := store.NewSQLiteStore(dbPath, "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	ctx := context.Background()
+	records := []store.Record{
+		{
+			ID: "r1", FilePath: "src/main.go", Language: "go",
+			Content: "func main() {}", ContentHash: "h1", NodeKind: "function_declaration",
+			Name: "main", StartLine: 1, EndLine: 3,
+			Embedding: []float32{1, 0, 0},
+		},
+		{
+			ID: "r2", FilePath: "CHANGELOG.md", Language: "markdown",
+			Content: "# v1.0", ContentHash: "h2", NodeKind: "atx_heading",
+			Name: "v1.0", StartLine: 1, EndLine: 1,
+			Embedding: []float32{0, 1, 0},
+		},
+	}
+	if err := s.Upsert(ctx, records); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
+	q := query.New(emb, s)
+	return mcp.NewServer(q, nil, nil, []string{"markdown", "yaml", "json"})
+}
+
+func TestHandleMap_CodeOnlyParam(t *testing.T) {
+	srv := setupTestServerWithMarkdown(t)
+	ctx := context.Background()
+
+	// Default (code_only=true): markdown excluded.
+	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	if err != nil {
+		t.Fatalf("HandleMap: %v", err)
+	}
+	text := result.Content[0].(mcpgo.TextContent).Text
+	if strings.Contains(text, "CHANGELOG") {
+		t.Error("default code_only=true should exclude markdown files")
+	}
+	if !strings.Contains(text, "main") {
+		t.Error("expected Go symbol in output")
+	}
+
+	// Explicit code_only=false: markdown included.
+	result2, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{
+		"code_only": false,
+	}))
+	if err != nil {
+		t.Fatalf("HandleMap: %v", err)
+	}
+	text2 := result2.Content[0].(mcpgo.TextContent).Text
+	if !strings.Contains(text2, "CHANGELOG") {
+		t.Error("code_only=false should include markdown files")
+	}
+}

@@ -1,0 +1,62 @@
+# Golang
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.dll
+*.out
+*.test
+*.prof
+coverage.txt
+coverage.html
+dist/
+bin/
+
+# Build artifacts
+/codamigo
+/build/
+
+# Test artifacts
+*.tmp
+
+# Profiling
+*.pprof
+*.prof
+
+# VSCode
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor temp files
+*.swp
+*.swo
+*~
+.#*
+*.bak
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Go cache
+.go-cache/
+go.work.sum
+
+# Misc
+*.log
+/tmp/
+/temp/
+.codamigo/
