@@ -81,7 +81,7 @@ func TestCallWithRetry_TransientTransportError_IsRetried(t *testing.T) {
 	}
 
 	vectors, err := CallWithRetry(
-		context.Background(),
+		t.Context(),
 		client,
 		nil,
 		"http://localhost",
@@ -113,7 +113,7 @@ func TestCallWithRetry_FatalTransportError_NotRetried(t *testing.T) {
 	}
 
 	_, err := CallWithRetry(
-		context.Background(),
+		t.Context(),
 		client,
 		nil,
 		"http://localhost",
@@ -157,7 +157,7 @@ func TestCallWithRetry_HTTPClientTimeout_IsRetried(t *testing.T) {
 
 	// Caller context is live — deadline came from the http client, not from us.
 	vectors, err := CallWithRetry(
-		context.Background(),
+		t.Context(),
 		client,
 		nil,
 		"http://localhost",
@@ -191,7 +191,7 @@ func TestCallWithRetry_CallerContextDeadline_NotRetried(t *testing.T) {
 	}
 
 	// Caller context is already expired before the first attempt.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := CallWithRetry(
@@ -229,7 +229,7 @@ func TestCallWithRetry_TransientTransportError_ExhaustsRetries(t *testing.T) {
 	}
 
 	_, err := CallWithRetry(
-		context.Background(),
+		t.Context(),
 		client,
 		nil,
 		"http://localhost",
@@ -286,7 +286,7 @@ func TestCallWithRetry_ReleasesSemaphoreAcrossBackoff(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 		// Try to acquire with a short timeout; we expect to succeed because
 		// CallWithRetry releases before sleeping.
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 		defer cancel()
 		if err := sem.Acquire(ctx, 1); err != nil {
 			return
@@ -296,7 +296,7 @@ func TestCallWithRetry_ReleasesSemaphoreAcrossBackoff(t *testing.T) {
 	}()
 
 	vectors, err := CallWithRetry(
-		context.Background(), client, sem,
+		t.Context(), client, sem,
 		"http://localhost", "k",
 		EmbeddingRequest{Model: "m", Input: []string{"hello"}},
 		2,

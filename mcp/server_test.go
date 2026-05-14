@@ -58,7 +58,7 @@ func setupTestServer(t *testing.T) *mcp.Server {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{
 			ID: "r1", FilePath: "src/main.go", Language: "go",
@@ -93,7 +93,7 @@ func makeSearchRequest(args map[string]any) mcpgo.CallToolRequest {
 
 func TestHandleSearch_BasicQuery(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
 		"query": "main function",
@@ -124,7 +124,7 @@ func TestHandleSearch_BasicQuery(t *testing.T) {
 
 func TestHandleSearch_MissingQuery(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{}))
 	if err != nil {
@@ -137,7 +137,7 @@ func TestHandleSearch_MissingQuery(t *testing.T) {
 
 func TestHandleSearch_NoQuerier(t *testing.T) {
 	srv := mcp.NewServer(nil, nil, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
 		"query": "test",
@@ -161,7 +161,7 @@ func makeMapRequest(args map[string]any) mcpgo.CallToolRequest {
 
 func TestHandleMap_BasicOutput(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
 	if err != nil {
@@ -182,7 +182,7 @@ func TestHandleMap_BasicOutput(t *testing.T) {
 
 func TestHandleMap_DefaultMaxTokens(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
 	if err != nil {
@@ -199,7 +199,7 @@ func TestHandleMap_DefaultMaxTokens(t *testing.T) {
 
 func TestHandleMap_NoQuerier(t *testing.T) {
 	srv := mcp.NewServer(nil, nil, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
 	if err != nil {
@@ -212,7 +212,7 @@ func TestHandleMap_NoQuerier(t *testing.T) {
 
 func TestHandleSearch_MaxTokens(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
 		"query":      "function",
@@ -268,7 +268,7 @@ func setupTestServerWithRecords(t *testing.T, n int) *mcp.Server {
 			Embedding: []float32{1, 0, 0},
 		}
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := st.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestHandleSearch_LimitClamping(t *testing.T) {
 	// Seed more records than the maximum allowed limit (100) so that an
 	// unclamped request would actually return more than 100 results.
 	srv := setupTestServerWithRecords(t, 150)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cases := []struct {
 		name    string
@@ -324,7 +324,7 @@ func TestHandleSearch_LimitClamping(t *testing.T) {
 
 func TestHandleSearch_NegativeOffsetAndMaxTokens(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
 		"query":      "function",
@@ -360,7 +360,7 @@ func TestHandleSearch_RefreshCooldown(t *testing.T) {
 	}}
 
 	srv := mcp.NewServerWithIndexer(q, mock, nil, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First call — cooldown not yet set; indexer should be called.
 	_, err = srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
@@ -400,7 +400,7 @@ func (m *mockIndexer) IndexFiles(_ context.Context, _ []string) error { return n
 
 func TestHandleSearch_PackageFilter(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
 		"query":   "function",
@@ -440,7 +440,7 @@ func TestHandleSearch_PackageFilter(t *testing.T) {
 
 func TestHandleSearch_MetadataOnly(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
 		"query":         "function",
@@ -485,7 +485,7 @@ func TestHandleSearch_MetadataOnly(t *testing.T) {
 
 func TestHandleSearch_PackagePathTraversal(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
 		"query":   "test",
@@ -542,7 +542,7 @@ func TestHandleSearch_PackagePathTraversal(t *testing.T) {
 
 func TestHandleSearch_UnsupportedDoubleStarGlob(t *testing.T) {
 	srv := setupTestServer(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cases := []struct {
 		name    string
@@ -586,7 +586,7 @@ func setupTestServerWithMarkdown(t *testing.T) *mcp.Server {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{
 			ID: "r1", FilePath: "src/main.go", Language: "go",
@@ -612,7 +612,7 @@ func setupTestServerWithMarkdown(t *testing.T) *mcp.Server {
 
 func TestHandleMap_CodeOnlyParam(t *testing.T) {
 	srv := setupTestServerWithMarkdown(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Default (code_only=true): markdown excluded.
 	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))

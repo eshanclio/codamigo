@@ -49,7 +49,7 @@ func TestWalk_BasicTraversal(t *testing.T) {
 	defer w.Close()
 
 	var paths []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -91,7 +91,7 @@ func TestWalk_IncludePatterns(t *testing.T) {
 	}
 	defer w.Close()
 
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -114,7 +114,7 @@ func TestWalk_ExcludePatterns(t *testing.T) {
 	}
 	defer w.Close()
 
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -134,7 +134,7 @@ func TestWalk_ContextCancellation(t *testing.T) {
 	}
 	defer w.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
 
 	count := 0
@@ -202,7 +202,7 @@ func TestWalk_SkipsCodamigoDir(t *testing.T) {
 	}
 	defer w.Close()
 
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -262,7 +262,7 @@ func TestWalk_NestedGitignore(t *testing.T) {
 	defer w.Close()
 
 	var walked []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -342,7 +342,7 @@ func TestWalk_NestedGitignoreNegation(t *testing.T) {
 	defer w.Close()
 
 	var walked []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -376,7 +376,7 @@ func TestWalk_CaignoreOnly(t *testing.T) {
 	defer w.Close()
 
 	var walked []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -413,7 +413,7 @@ func TestWalk_CaignoreExtends(t *testing.T) {
 	defer w.Close()
 
 	var walked []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -449,7 +449,7 @@ func TestWalk_CaignoreNegationOverride(t *testing.T) {
 	defer w.Close()
 
 	var walked []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -479,7 +479,7 @@ func TestWalk_CaignoreFileNotYielded(t *testing.T) {
 	}
 	defer w.Close()
 
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -543,7 +543,7 @@ func TestWalk_NestedCaignore(t *testing.T) {
 	defer w.Close()
 
 	var walked []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -588,7 +588,7 @@ func TestWalker_GitignorePartialReadOnScannerError(t *testing.T) {
 	defer w.Close()
 
 	var walked []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -680,7 +680,7 @@ func TestWalk_Symlinks(t *testing.T) {
 	defer w.Close()
 
 	var yielded []string
-	for path, err := range w.Walk(context.Background()) {
+	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
 			t.Fatalf("walk error: %v", err)
 		}
@@ -723,7 +723,7 @@ func TestConcurrentWalkAndMatch(t *testing.T) {
 	}
 	defer w.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	var wg sync.WaitGroup

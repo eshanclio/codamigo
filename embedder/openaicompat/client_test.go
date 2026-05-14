@@ -52,7 +52,7 @@ func TestCallAPI_Success(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	vectors, err := openaicompat.CallAPI(context.Background(), http.DefaultClient, srv.URL, "test-key", openaicompat.EmbeddingRequest{
+	vectors, err := openaicompat.CallAPI(t.Context(), http.DefaultClient, srv.URL, "test-key", openaicompat.EmbeddingRequest{
 		Model: "test-model",
 		Input: []string{"hello", "world"},
 	})
@@ -94,7 +94,7 @@ func TestCallAPI_OptionalFieldsOmitted(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	_, err := openaicompat.CallAPI(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallAPI(t.Context(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	})
@@ -125,7 +125,7 @@ func TestCallAPI_OptionalFieldsPresent(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	_, err := openaicompat.CallAPI(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallAPI(t.Context(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model:      "m",
 		Input:      []string{"text"},
 		Dimensions: 512,
@@ -158,7 +158,7 @@ func TestCallAPI_4xxError(t *testing.T) {
 		w.Write([]byte(`{"error": "invalid model"}`))
 	})
 
-	_, err := openaicompat.CallAPI(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallAPI(t.Context(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "bad",
 		Input: []string{"text"},
 	})
@@ -181,7 +181,7 @@ func TestCallAPI_MalformedJSON(t *testing.T) {
 		w.Write([]byte(`not json`))
 	})
 
-	_, err := openaicompat.CallAPI(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallAPI(t.Context(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	})
@@ -208,7 +208,7 @@ func TestCallWithRetry_RetriesOn429(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	vectors, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
+	vectors, err := openaicompat.CallWithRetry(t.Context(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 1*time.Millisecond)
@@ -241,7 +241,7 @@ func TestCallWithRetry_RetriesOn5xx(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	vectors, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
+	vectors, err := openaicompat.CallWithRetry(t.Context(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 1*time.Millisecond)
@@ -262,7 +262,7 @@ func TestCallWithRetry_MaxRetriesExhausted(t *testing.T) {
 		w.Write([]byte(`rate limited`))
 	})
 
-	_, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallWithRetry(t.Context(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 3, 1*time.Millisecond)
@@ -282,7 +282,7 @@ func TestCallWithRetry_NoRetryOn4xx(t *testing.T) {
 		w.Write([]byte(`bad request`))
 	})
 
-	_, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallWithRetry(t.Context(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 1*time.Millisecond)
@@ -309,7 +309,7 @@ func TestCallAPI_VectorCountMismatch(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	_, err := openaicompat.CallAPI(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallAPI(t.Context(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text1", "text2"},
 	})
@@ -324,7 +324,7 @@ func TestCallWithRetry_ContextCancellation(t *testing.T) {
 		w.Write([]byte(`rate limited`))
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := openaicompat.CallWithRetry(ctx, http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
@@ -359,7 +359,7 @@ func TestClient_Embed(t *testing.T) {
 		t.Fatalf("creating client: %v", err)
 	}
 
-	vec, err := client.Embed(context.Background(), "hello")
+	vec, err := client.Embed(t.Context(), "hello")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestClient_EmbedBatch_Batching(t *testing.T) {
 	}
 
 	texts := []string{"a", "b", "c", "d", "e", "f", "g"}
-	vectors, err := client.EmbedBatch(context.Background(), texts)
+	vectors, err := client.EmbedBatch(t.Context(), texts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestClient_EmbedBatch_Empty(t *testing.T) {
 		t.Fatalf("creating client: %v", err)
 	}
 
-	vectors, err := client.EmbedBatch(context.Background(), []string{})
+	vectors, err := client.EmbedBatch(t.Context(), []string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -493,7 +493,7 @@ func TestClient_Embed_RetrySuccess(t *testing.T) {
 		t.Fatalf("creating client: %v", err)
 	}
 
-	vec, err := client.Embed(context.Background(), "hello")
+	vec, err := client.Embed(t.Context(), "hello")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -513,7 +513,7 @@ func TestClient_EmbedBatch_ContextCancelled(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	client, err := openaicompat.New(openaicompat.Options{
@@ -548,7 +548,7 @@ func TestCallAPI_LargeResponseTruncated(t *testing.T) {
 		}
 	})
 
-	_, err := openaicompat.CallAPI(context.Background(), http.DefaultClient, srv.URL, "test-key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallAPI(t.Context(), http.DefaultClient, srv.URL, "test-key", openaicompat.EmbeddingRequest{
 		Model: "test-model",
 		Input: []string{"hello"},
 	})
@@ -569,7 +569,7 @@ func TestCallWithRetry_ContextCancellation_NoLeak(t *testing.T) {
 		w.Write([]byte(`{"error": "rate limited"}`))
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	// Cancel after the first 429 response is received and backoff timer starts.
 	// We use a goroutine that waits for the first attempt, then cancels.
@@ -645,7 +645,7 @@ func TestNew_RateLimitZero_DisablesThrottling(t *testing.T) {
 	for i := range texts {
 		texts[i] = "text"
 	}
-	_, err = client.EmbedBatch(context.Background(), texts)
+	_, err = client.EmbedBatch(t.Context(), texts)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -740,7 +740,7 @@ func TestEmbedBatchPartial_SubBatchFailure_DoesNotCancelSiblings(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	vectors, errs := c.EmbedBatchPartial(context.Background(), []string{"FAIL", "text1", "text2"})
+	vectors, errs := c.EmbedBatchPartial(t.Context(), []string{"FAIL", "text1", "text2"})
 	if len(vectors) != 3 || len(errs) != 3 {
 		t.Fatalf("len(vectors)=%d len(errs)=%d, want 3,3", len(vectors), len(errs))
 	}
@@ -791,7 +791,7 @@ func TestEmbedBatchPartial_ContextCancel_ReturnsPromptly(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -845,7 +845,7 @@ func TestClient_SemaphoreCapsGlobalConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 2 {
 		wg.Go(func() {
-			_, _ = c.EmbedBatch(context.Background(), []string{"a", "b", "c", "d"})
+			_, _ = c.EmbedBatch(t.Context(), []string{"a", "b", "c", "d"})
 		})
 	}
 	wg.Wait()
@@ -886,7 +886,7 @@ func TestEmbedBatchPartial_VectorCountMismatch_SetsPerTextErrors(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	vectors, errs := c.EmbedBatchPartial(context.Background(), []string{"a", "b"})
+	vectors, errs := c.EmbedBatchPartial(t.Context(), []string{"a", "b"})
 	if len(vectors) != 2 || len(errs) != 2 {
 		t.Fatalf("len(vectors)=%d len(errs)=%d, want 2,2", len(vectors), len(errs))
 	}
@@ -939,7 +939,7 @@ func TestClient_EmbedBatch_RateLimiting(t *testing.T) {
 	}
 
 	texts := []string{"a", "b", "c", "d"}
-	_, err = client.EmbedBatch(context.Background(), texts)
+	_, err = client.EmbedBatch(t.Context(), texts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

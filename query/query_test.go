@@ -46,7 +46,7 @@ func TestQuerier_Search(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -62,7 +62,7 @@ func TestQuerier_Search(t *testing.T) {
 			Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestQuerier_SearchWithOptions_PathFilter(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -137,7 +137,7 @@ func TestQuerier_SearchWithOptions_Offset(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{ID: "r1", FilePath: "a.go", Language: "go", Content: "func a(){}", ContentHash: "h1", NodeKind: "fn", Name: "a", Embedding: []float32{1, 0, 0}},
@@ -201,7 +201,7 @@ func TestQuerier_Map_BasicOutput(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -269,7 +269,7 @@ func TestQuerier_Map_Truncation(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	var records []store.Record
 	for i := range 20 {
@@ -310,7 +310,7 @@ func TestQuerier_Map_EmptyStore(t *testing.T) {
 	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, s)
 
-	result, err := q.Map(context.Background(), query.MapOptions{MaxTokens: 2000})
+	result, err := q.Map(t.Context(), query.MapOptions{MaxTokens: 2000})
 	if err != nil {
 		t.Fatalf("Map: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestQuerier_Map_NestedSymbolsIndented(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -371,7 +371,7 @@ func TestQuerier_SearchWithOptions_MaxTokens(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	content := strings.Repeat("x", 100)
 	records := []store.Record{
@@ -409,7 +409,7 @@ func TestQuerier_SearchWithOptions_MaxTokens_Zero(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{ID: "r1", FilePath: "a.go", Language: "go", Content: "func a(){}", ContentHash: "h1", NodeKind: "fn", Name: "a", Embedding: []float32{1, 0, 0}},
@@ -442,7 +442,7 @@ func TestQuerier_SearchWithOptions_MaxTokens_AlwaysOneResult(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{ID: "r1", FilePath: "a.go", Language: "go", Content: strings.Repeat("x", 1000), ContentHash: "h1", NodeKind: "fn", Name: "a", Embedding: []float32{1, 0, 0}},
@@ -507,7 +507,7 @@ func TestQuerier_CacheHit(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -554,7 +554,7 @@ func TestQuerier_SearchWithOptions_PackageFilter(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -602,7 +602,7 @@ func TestQuerier_Map_AllOptionsZeroValue(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -643,7 +643,7 @@ func TestQuerier_Map_CodeOnlyFilter(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -709,7 +709,7 @@ func TestQuerier_Map_LineRanges(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -756,7 +756,7 @@ func TestQuerier_Map_FileSummary(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// 5 symbols in one file to trigger summary (threshold is 5).
 	var records []store.Record
@@ -802,7 +802,7 @@ func TestQuerier_Map_Visibility(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -845,7 +845,7 @@ func TestQuerier_Map_VisibilityPython(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -888,7 +888,7 @@ func TestQuerier_Map_VisibilityJSExport(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -931,7 +931,7 @@ func TestQuerier_Map_NestingHierarchy(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -1007,7 +1007,7 @@ func TestQuerier_Map_OrphanChildren(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -1042,7 +1042,7 @@ func TestQuerier_Map_CodeOnlyCustomLanguages(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -1099,7 +1099,7 @@ func TestQuerier_Map_CodeOnlyEmptyList(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{

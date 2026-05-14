@@ -1005,11 +1005,11 @@ func TestIndex_NilProgress_LogsButDoesNotPanic(t *testing.T) {
 	emb := &partialEmbedder{dim: dim, failTexts: map[string]bool{"BadChunkMarker": true}}
 
 	idx := indexer.New(c, emb, s, w, 1, 0, 0, nil, nil) // progress=nil
-	if err = idx.Index(context.Background()); err != nil {
+	if err = idx.Index(t.Context()); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
 
-	okHashes, err := s.FileHashes(context.Background(), []string{okPath})
+	okHashes, err := s.FileHashes(t.Context(), []string{okPath})
 	if err != nil {
 		t.Fatalf("FileHashes: %v", err)
 	}
@@ -1067,14 +1067,14 @@ func TestIndex_ContinuesAcrossStageBatches_AfterPartialFailure(t *testing.T) {
 	emb := &partialEmbedder{dim: dim, failTexts: map[string]bool{"BadChunkMarker": true}}
 
 	idx := indexer.New(c, emb, s, w, concurrency, 0, 0, nil, nil)
-	if err = idx.Index(context.Background()); err != nil {
+	if err = idx.Index(t.Context()); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
 
 	// Files 1..8 should be indexed.
 	for i := 1; i < 9; i++ {
 		p := filepath.Join(root, fmt.Sprintf("f%d.go", i))
-		h, err := s.FileHashes(context.Background(), []string{p})
+		h, err := s.FileHashes(t.Context(), []string{p})
 		if err != nil {
 			t.Fatalf("FileHashes: %v", err)
 		}
@@ -1084,7 +1084,7 @@ func TestIndex_ContinuesAcrossStageBatches_AfterPartialFailure(t *testing.T) {
 	}
 	// File 0 should NOT be indexed.
 	p0 := filepath.Join(root, "f0.go")
-	h, err := s.FileHashes(context.Background(), []string{p0})
+	h, err := s.FileHashes(t.Context(), []string{p0})
 	if err != nil {
 		t.Fatalf("FileHashes: %v", err)
 	}

@@ -34,7 +34,7 @@ func TestPollWatcher_DetectsNewFile(t *testing.T) {
 		}
 		defer w.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
 
 		ch := w.Watch(ctx)
@@ -84,7 +84,7 @@ func TestPollWatcher_DetectsModification(t *testing.T) {
 		}
 		defer w.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
 
 		ch := w.Watch(ctx)
@@ -133,7 +133,7 @@ func TestPollWatcher_DetectsRemoval(t *testing.T) {
 		}
 		defer w.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
 
 		ch := w.Watch(ctx)
@@ -175,7 +175,7 @@ func TestPollWatcher_ContextCancellation(t *testing.T) {
 		}
 		defer w.Close()
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		ch := w.Watch(ctx)
 		cancel()
 
@@ -215,7 +215,7 @@ func TestFSNotifyWatcher_DetectsNewFile(t *testing.T) {
 	}
 	defer w.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	ch := w.Watch(ctx)
@@ -262,7 +262,7 @@ func TestFSNotifyWatcher_DetectsRemoval(t *testing.T) {
 	}
 	defer w.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	ch := w.Watch(ctx)
@@ -305,7 +305,7 @@ func TestPollWatcher_AdaptiveInterval(t *testing.T) {
 		}
 		defer w.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
 
 		ch := w.Watch(ctx)
@@ -356,7 +356,7 @@ func TestFSNotifyWatcher_DetectsModification(t *testing.T) {
 	}
 	defer w.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
 	ch := w.Watch(ctx)
@@ -403,7 +403,7 @@ func TestPollWatcher_MatchFnFilters(t *testing.T) {
 		}
 		defer w.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 
 		ch := w.Watch(ctx)
