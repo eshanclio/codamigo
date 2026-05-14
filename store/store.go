@@ -66,6 +66,14 @@ type Symbol struct {
 	Language  string // language name, e.g. "go", "markdown"
 }
 
+// FileRecords groups records for a single file with its content hash,
+// used for batched write operations.
+type FileRecords struct {
+	FilePath string
+	Records  []Record
+	FileHash string
+}
+
 // Store is the persistence interface for code chunk CRUD and search operations.
 type Store interface {
 	// Upsert writes records to the chunk, vector, and FTS tables in a single
@@ -75,19 +83,18 @@ type Store interface {
 	Delete(ctx context.Context, ids []string) error
 	// DeleteByFile removes all chunks for filePath from all content tables.
 	DeleteByFile(ctx context.Context, filePath string) error
-	// ReplaceByFile atomically replaces all chunks for filePath with records,
-	// and updates the file hash to fileHash, in a single transaction.
-	// If records is empty, all existing chunks for filePath are removed and the
-	// file hash is updated (equivalent to clearing a file's index entry).
-	ReplaceByFile(ctx context.Context, filePath string, records []Record, fileHash string) error
+	// FileHashes returns a map of filePath → contentHash for all given paths.
+	// Paths not in the store are absent from the returned map.
+	FileHashes(ctx context.Context, filePaths []string) (map[string]string, error)
+	// ReplaceByFiles atomically replaces chunks for multiple files in a single
+	// transaction. Each entry's records replace all existing chunks for that file,
+	// and the file hash is updated. Rolls back entirely on error.
+	ReplaceByFiles(ctx context.Context, entries []FileRecords) error
 
 	// Search runs hybrid KNN + BM25 search and returns results merged via
 	// Reciprocal Rank Fusion, optionally filtered by language and path glob.
 	Search(ctx context.Context, query SearchQuery) ([]SearchResult, error)
 
-	// FileHash returns the stored content hash for filePath, used to detect
-	// whether a file has changed since the last index run.
-	FileHash(ctx context.Context, filePath string) (string, error)
 	// ChunkHashesByFile returns a map of chunk ID → content hash for all
 	// chunks belonging to filePath. Used to detect which chunks changed.
 	ChunkHashesByFile(ctx context.Context, filePath string) (map[string]string, error)
@@ -96,8 +103,6 @@ type Store interface {
 	EmbeddingsByContentHash(ctx context.Context, contentHashes []string) (map[string][]float32, error)
 	// ListFiles returns the absolute paths of all indexed source files.
 	ListFiles(ctx context.Context) ([]string, error)
-	// SetFileHash records the content hash for filePath after a successful index.
-	SetFileHash(ctx context.Context, filePath, contentHash string) error
 	// Stats returns aggregate chunk and file counts for the indexed codebase.
 	Stats(ctx context.Context) (IndexStats, error)
 	// ListSymbols returns all named symbols ordered by file path and start line.

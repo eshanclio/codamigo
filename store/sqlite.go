@@ -41,6 +41,10 @@ func NewSQLiteStore(dbPath string, embeddingModel string, embeddingDim int) (Sto
 		return nil, fmt.Errorf("embeddingDim must be positive, got %d", embeddingDim)
 	}
 
+	if dbPath == ":memory:" {
+		return newMemoryStore(embeddingModel, embeddingDim)
+	}
+
 	if dir := filepath.Dir(dbPath); dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("creating store directory: %w", err)
@@ -75,6 +79,29 @@ func NewSQLiteStore(dbPath string, embeddingModel string, embeddingDim int) (Sto
 	if err = s.initSchema(context.Background(), embeddingModel, embeddingDim); err != nil {
 		writer.Close()
 		reader.Close()
+		return nil, fmt.Errorf("initializing schema: %w", err)
+	}
+
+	return s, nil
+}
+
+func newMemoryStore(embeddingModel string, embeddingDim int) (Store, error) {
+	pragmas := "_busy_timeout=5000&_synchronous=NORMAL&_cache_size=-20000&_temp_store=MEMORY"
+	db, err := sql.Open("sqlite3", ":memory:?"+pragmas+"&_txlock=immediate")
+	if err != nil {
+		return nil, fmt.Errorf("opening in-memory database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	if err = db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("connecting to in-memory database: %w", err)
+	}
+
+	s := &sqliteStore{reader: db, writer: db, embeddingDim: embeddingDim}
+	if err = s.initSchema(context.Background(), embeddingModel, embeddingDim); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
 
@@ -223,9 +250,20 @@ func (s *sqliteStore) SetMeta(ctx context.Context, key, value string) error {
 }
 
 func (s *sqliteStore) Close() error {
-	s.writer.ExecContext(context.Background(), "PRAGMA optimize") //nolint:errcheck // best-effort optimization hint on close
-	s.reader.ExecContext(context.Background(), "PRAGMA optimize") //nolint:errcheck // best-effort optimization hint on close
-	return errors.Join(s.writer.Close(), s.reader.Close())
+	s.writer.ExecContext(context.Background(), "PRAGMA optimize") //nolint:errcheck
+	if s.reader != s.writer {
+		s.reader.ExecContext(context.Background(), "PRAGMA optimize") //nolint:errcheck
+	}
+	var errs []error
+	if err := s.writer.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	if s.reader != s.writer {
+		if err := s.reader.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *sqliteStore) Checkpoint(ctx context.Context) error {
@@ -438,11 +476,17 @@ func (s *sqliteStore) DeleteByFile(ctx context.Context, filePath string) error {
 	return tx.Commit()
 }
 
-func (s *sqliteStore) ReplaceByFile(ctx context.Context, filePath string, records []Record, fileHash string) error {
-	for _, r := range records {
-		if len(r.Embedding) != s.embeddingDim {
-			return fmt.Errorf("record %q: embedding length %d does not match store dimension %d",
-				r.ID, len(r.Embedding), s.embeddingDim)
+func (s *sqliteStore) ReplaceByFiles(ctx context.Context, entries []FileRecords) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	for _, entry := range entries {
+		for _, r := range entry.Records {
+			if len(r.Embedding) != s.embeddingDim {
+				return fmt.Errorf("record %q: embedding length %d does not match store dimension %d",
+					r.ID, len(r.Embedding), s.embeddingDim)
+			}
 		}
 	}
 
@@ -452,38 +496,6 @@ func (s *sqliteStore) ReplaceByFile(ctx context.Context, filePath string, record
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.QueryContext(ctx, "SELECT id FROM chunks WHERE file_path = ?", filePath)
-	if err != nil {
-		return fmt.Errorf("querying chunks for file %q: %w", filePath, err)
-	}
-	defer rows.Close()
-
-	var oldIDs []string
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			return fmt.Errorf("scanning chunk id: %w", err)
-		}
-		oldIDs = append(oldIDs, id)
-	}
-	if err = rows.Err(); err != nil {
-		return fmt.Errorf("iterating chunk ids: %w", err)
-	}
-	rows.Close()
-
-	for _, id := range oldIDs {
-		if _, err = tx.ExecContext(ctx, "DELETE FROM vec_chunks WHERE id = ?", id); err != nil {
-			return fmt.Errorf("deleting vec %q: %w", id, err)
-		}
-		if _, err = tx.ExecContext(ctx, "DELETE FROM chunks_fts WHERE id = ?", id); err != nil {
-			return fmt.Errorf("deleting fts %q: %w", id, err)
-		}
-	}
-
-	if _, err = tx.ExecContext(ctx, "DELETE FROM chunks WHERE file_path = ?", filePath); err != nil {
-		return fmt.Errorf("deleting chunks for file %q: %w", filePath, err)
-	}
-
 	chunkStmt, err := tx.PrepareContext(ctx,
 		`INSERT OR REPLACE INTO chunks (id, file_path, language, content, content_hash, node_kind, name, parent, start_line, end_line)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -492,65 +504,92 @@ func (s *sqliteStore) ReplaceByFile(ctx context.Context, filePath string, record
 	}
 	defer chunkStmt.Close()
 
-	vecDeleteStmt, err := tx.PrepareContext(ctx,
-		`DELETE FROM vec_chunks WHERE id = ?`)
+	vecDeleteStmt, err := tx.PrepareContext(ctx, `DELETE FROM vec_chunks WHERE id = ?`)
 	if err != nil {
 		return fmt.Errorf("preparing vec delete: %w", err)
 	}
 	defer vecDeleteStmt.Close()
 
-	vecStmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO vec_chunks (id, language, embedding) VALUES (?, ?, ?)`)
+	vecStmt, err := tx.PrepareContext(ctx, `INSERT INTO vec_chunks (id, language, embedding) VALUES (?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("preparing vec insert: %w", err)
 	}
 	defer vecStmt.Close()
 
-	ftsDeleteStmt, err := tx.PrepareContext(ctx,
-		`DELETE FROM chunks_fts WHERE id = ?`)
+	ftsDeleteStmt, err := tx.PrepareContext(ctx, `DELETE FROM chunks_fts WHERE id = ?`)
 	if err != nil {
 		return fmt.Errorf("preparing fts delete: %w", err)
 	}
 	defer ftsDeleteStmt.Close()
 
-	ftsStmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO chunks_fts (id, content, name, parent) VALUES (?, ?, ?, ?)`)
+	ftsStmt, err := tx.PrepareContext(ctx, `INSERT INTO chunks_fts (id, content, name, parent) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("preparing fts insert: %w", err)
 	}
 	defer ftsStmt.Close()
 
-	for _, r := range records {
-		if _, err = chunkStmt.ExecContext(ctx, r.ID, r.FilePath, r.Language, r.Content, r.ContentHash, r.NodeKind, r.Name, r.Parent, r.StartLine, r.EndLine); err != nil {
-			return fmt.Errorf("inserting chunk %q: %w", r.ID, err)
-		}
-
-		if _, err = vecDeleteStmt.ExecContext(ctx, r.ID); err != nil {
-			return fmt.Errorf("deleting vec %q: %w", r.ID, err)
-		}
-
-		vecBlob, err := serializeFloat32(r.Embedding)
+	for _, entry := range entries {
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM chunks WHERE file_path = ?", entry.FilePath)
 		if err != nil {
-			return fmt.Errorf("serializing embedding for %q: %w", r.ID, err)
+			return fmt.Errorf("querying chunks for file %q: %w", entry.FilePath, err)
 		}
-		if _, err = vecStmt.ExecContext(ctx, r.ID, r.Language, vecBlob); err != nil {
-			return fmt.Errorf("inserting vec %q: %w", r.ID, err)
+		var oldIDs []string
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning chunk id: %w", err)
+			}
+			oldIDs = append(oldIDs, id)
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterating chunk ids: %w", err)
+		}
+		rows.Close()
+
+		for _, id := range oldIDs {
+			if _, err = vecDeleteStmt.ExecContext(ctx, id); err != nil {
+				return fmt.Errorf("deleting vec %q: %w", id, err)
+			}
+			if _, err = ftsDeleteStmt.ExecContext(ctx, id); err != nil {
+				return fmt.Errorf("deleting fts %q: %w", id, err)
+			}
 		}
 
-		if _, err = ftsDeleteStmt.ExecContext(ctx, r.ID); err != nil {
-			return fmt.Errorf("deleting fts %q: %w", r.ID, err)
+		if _, err = tx.ExecContext(ctx, "DELETE FROM chunks WHERE file_path = ?", entry.FilePath); err != nil {
+			return fmt.Errorf("deleting chunks for file %q: %w", entry.FilePath, err)
 		}
 
-		tokenContent := TokenizeForSearch(r.Content)
-		tokenName := TokenizeForSearch(r.Name)
-		tokenParent := TokenizeForSearch(r.Parent)
-		if _, err = ftsStmt.ExecContext(ctx, r.ID, tokenContent, tokenName, tokenParent); err != nil {
-			return fmt.Errorf("inserting fts %q: %w", r.ID, err)
+		for _, r := range entry.Records {
+			if _, err = chunkStmt.ExecContext(ctx, r.ID, r.FilePath, r.Language, r.Content, r.ContentHash, r.NodeKind, r.Name, r.Parent, r.StartLine, r.EndLine); err != nil {
+				return fmt.Errorf("inserting chunk %q: %w", r.ID, err)
+			}
+			if _, err = vecDeleteStmt.ExecContext(ctx, r.ID); err != nil {
+				return fmt.Errorf("deleting vec %q: %w", r.ID, err)
+			}
+			vecBlob, err := serializeFloat32(r.Embedding)
+			if err != nil {
+				return fmt.Errorf("serializing embedding for %q: %w", r.ID, err)
+			}
+			if _, err = vecStmt.ExecContext(ctx, r.ID, r.Language, vecBlob); err != nil {
+				return fmt.Errorf("inserting vec %q: %w", r.ID, err)
+			}
+			if _, err = ftsDeleteStmt.ExecContext(ctx, r.ID); err != nil {
+				return fmt.Errorf("deleting fts %q: %w", r.ID, err)
+			}
+			tokenContent := TokenizeForSearch(r.Content)
+			tokenName := TokenizeForSearch(r.Name)
+			tokenParent := TokenizeForSearch(r.Parent)
+			if _, err = ftsStmt.ExecContext(ctx, r.ID, tokenContent, tokenName, tokenParent); err != nil {
+				return fmt.Errorf("inserting fts %q: %w", r.ID, err)
+			}
 		}
-	}
 
-	if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO files (path, content_hash, indexed_at) VALUES (?, ?, ?)", filePath, fileHash, time.Now().Unix()); err != nil {
-		return fmt.Errorf("setting file hash for %q: %w", filePath, err)
+		if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO files (path, content_hash, indexed_at) VALUES (?, ?, ?)",
+			entry.FilePath, entry.FileHash, time.Now().Unix()); err != nil {
+			return fmt.Errorf("setting file hash for %q: %w", entry.FilePath, err)
+		}
 	}
 
 	return tx.Commit()
@@ -644,7 +683,7 @@ func (s *sqliteStore) searchOnce(ctx context.Context, q SearchQuery, fetchLimit 
 			for ftsRows.Next() {
 				var id string
 				var bm25Rank float64
-				if err := ftsRows.Scan(&id, &bm25Rank); err != nil {
+				if err = ftsRows.Scan(&id, &bm25Rank); err != nil {
 					return nil, fmt.Errorf("scanning bm25 result: %w", err)
 				}
 				if sc, ok := idScores[id]; ok {
@@ -860,16 +899,46 @@ func (s *sqliteStore) fetchRecordsFiltered(ctx context.Context, ids []string, q 
 	return result, nil
 }
 
-func (s *sqliteStore) FileHash(ctx context.Context, filePath string) (string, error) {
-	var hash string
-	err := s.reader.QueryRowContext(ctx, "SELECT content_hash FROM files WHERE path = ?", filePath).Scan(&hash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+func (s *sqliteStore) FileHashes(ctx context.Context, filePaths []string) (map[string]string, error) {
+	if len(filePaths) == 0 {
+		return make(map[string]string), nil
 	}
-	if err != nil {
-		return "", fmt.Errorf("querying file hash for %q: %w", filePath, err)
+
+	result := make(map[string]string, len(filePaths))
+
+	const batchSize = 500
+	for start := 0; start < len(filePaths); start += batchSize {
+		end := min(start+batchSize, len(filePaths))
+		batch := filePaths[start:end]
+
+		ph := placeholders(len(batch))
+		args := make([]any, len(batch))
+		for i, p := range batch {
+			args[i] = p
+		}
+
+		rows, err := s.reader.QueryContext(ctx,
+			"SELECT path, content_hash FROM files WHERE path IN ("+ph+")", args...)
+		if err != nil {
+			return nil, fmt.Errorf("querying file hashes: %w", err)
+		}
+
+		for rows.Next() {
+			var path, hash string
+			if err = rows.Scan(&path, &hash); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning file hash: %w", err)
+			}
+			result[path] = hash
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterating file hashes: %w", err)
+		}
+		rows.Close()
 	}
-	return hash, nil
+
+	return result, nil
 }
 
 func (s *sqliteStore) ChunkHashesByFile(ctx context.Context, filePath string) (map[string]string, error) {
@@ -1068,14 +1137,4 @@ func (s *sqliteStore) ListSymbols(ctx context.Context) ([]Symbol, error) {
 		return nil, fmt.Errorf("iterating symbols: %w", err)
 	}
 	return symbols, nil
-}
-
-func (s *sqliteStore) SetFileHash(ctx context.Context, filePath, contentHash string) error {
-	_, err := s.writer.ExecContext(ctx,
-		"INSERT OR REPLACE INTO files (path, content_hash, indexed_at) VALUES (?, ?, ?)",
-		filePath, contentHash, time.Now().Unix())
-	if err != nil {
-		return fmt.Errorf("setting file hash for %q: %w", filePath, err)
-	}
-	return nil
 }

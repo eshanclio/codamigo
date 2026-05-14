@@ -13,4 +13,11 @@ import "context"
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+	// EmbedBatchPartial embeds texts in sub-batches with per-text failure
+	// isolation. Returned slices satisfy:
+	//   - len(vectors) == len(errs) == len(texts)
+	//   - vectors[i] is nil iff errs[i] != nil
+	// Callers should also inspect ctx.Err() to distinguish caller
+	// cancellation from per-sub-batch failure.
+	EmbedBatchPartial(ctx context.Context, texts []string) ([][]float32, []error)
 }

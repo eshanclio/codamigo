@@ -54,6 +54,9 @@ type Config struct {
 	EmbeddingMaxRetries int `yaml:"embedding_max_retries"`
 	// EmbeddingRetryBaseDelay is the initial backoff delay before the first retry.
 	EmbeddingRetryBaseDelay time.Duration `yaml:"-"`
+	// EmbeddingHTTPTimeout caps each embedding HTTP request. Default 60s.
+	// Increase for slow local backends; decrease for fast cloud endpoints.
+	EmbeddingHTTPTimeout time.Duration `yaml:"-"`
 	// IncludePatterns limits indexing to files matching these glob patterns.
 	IncludePatterns []string `yaml:"include_patterns"`
 	// ExcludePatterns skips files matching these glob patterns during indexing.
@@ -73,6 +76,9 @@ type Config struct {
 	// MaxFileSize is the maximum file size in bytes to index. Files larger than
 	// this are skipped. 0 means no limit. The default (set by [Defaults]) is 1 MB.
 	MaxFileSize int64 `yaml:"-"`
+	// WriteBatchSize is the number of files per DB write transaction during
+	// batch indexing. 0 means use the default (50).
+	WriteBatchSize int `yaml:"write_batch_size"`
 	// NonCodeLanguages lists language names excluded from the map when
 	// CodeOnly is true. Defaults to ["markdown", "yaml", "json"].
 	NonCodeLanguages []string `yaml:"non_code_languages"`
@@ -93,6 +99,7 @@ type fileConfig struct {
 	EmbeddingRateBurst      int      `yaml:"embedding_rate_burst"`
 	EmbeddingMaxRetries     int      `yaml:"embedding_max_retries"`
 	EmbeddingRetryBaseDelay string   `yaml:"embedding_retry_base_delay"`
+	EmbeddingHTTPTimeout    string   `yaml:"embedding_http_timeout"`
 	IncludePatterns         []string `yaml:"include_patterns"`
 	ExcludePatterns         []string `yaml:"exclude_patterns"`
 	StorePath               string   `yaml:"store_path"`
@@ -102,6 +109,7 @@ type fileConfig struct {
 	DebounceWindow          string   `yaml:"debounce_window"`
 	IndexConcurrency        int      `yaml:"index_concurrency"`
 	MaxFileSize             *int64   `yaml:"max_file_size,omitempty"`
+	WriteBatchSize          int      `yaml:"write_batch_size"`
 	NonCodeLanguages        []string `yaml:"non_code_languages"`
 }
 
@@ -135,6 +143,10 @@ func (fc *fileConfig) toConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	httpTimeout, err := parseDuration("embedding_http_timeout", fc.EmbeddingHTTPTimeout)
+	if err != nil {
+		return nil, err
+	}
 	pollInterval, err := parseDuration("poll_interval", fc.PollInterval)
 	if err != nil {
 		return nil, err
@@ -156,6 +168,7 @@ func (fc *fileConfig) toConfig() (*Config, error) {
 		EmbeddingRateBurst:      fc.EmbeddingRateBurst,
 		EmbeddingMaxRetries:     fc.EmbeddingMaxRetries,
 		EmbeddingRetryBaseDelay: retryDelay,
+		EmbeddingHTTPTimeout:    httpTimeout,
 		IncludePatterns:         fc.IncludePatterns,
 		ExcludePatterns:         fc.ExcludePatterns,
 		StorePath:               fc.StorePath,
@@ -165,6 +178,7 @@ func (fc *fileConfig) toConfig() (*Config, error) {
 		DebounceWindow:          debounceWindow,
 		IndexConcurrency:        fc.IndexConcurrency,
 		MaxFileSize:             maxFileSizeFromYAML(fc.MaxFileSize),
+		WriteBatchSize:          fc.WriteBatchSize,
 		NonCodeLanguages:        fc.NonCodeLanguages,
 	}, nil
 }
@@ -182,12 +196,14 @@ func Defaults() *Config {
 		EmbeddingRateBurst:      100,
 		EmbeddingMaxRetries:     3,
 		EmbeddingRetryBaseDelay: 500 * time.Millisecond,
+		EmbeddingHTTPTimeout:    60 * time.Second,
 		StorePath:               ".codamigo/store.db",
 		WatchMode:               "auto",
 		PollInterval:            5 * time.Second,
 		DebounceWindow:          500 * time.Millisecond,
 		IndexConcurrency:        20,
 		MaxFileSize:             1_048_576, // 1 MB
+		WriteBatchSize:          50,
 		NonCodeLanguages:        []string{"markdown", "yaml", "json"},
 	}
 }
@@ -290,6 +306,9 @@ func (c *Config) Merge(o *Config) *Config {
 	if o.EmbeddingRetryBaseDelay != 0 {
 		out.EmbeddingRetryBaseDelay = o.EmbeddingRetryBaseDelay
 	}
+	if o.EmbeddingHTTPTimeout != 0 {
+		out.EmbeddingHTTPTimeout = o.EmbeddingHTTPTimeout
+	}
 	if o.IncludePatterns != nil {
 		out.IncludePatterns = slices.Clone(o.IncludePatterns)
 	}
@@ -319,6 +338,9 @@ func (c *Config) Merge(o *Config) *Config {
 	} else if o.MaxFileSize > 0 {
 		out.MaxFileSize = o.MaxFileSize
 	}
+	if o.WriteBatchSize != 0 {
+		out.WriteBatchSize = o.WriteBatchSize
+	}
 	if o.NonCodeLanguages != nil {
 		out.NonCodeLanguages = slices.Clone(o.NonCodeLanguages)
 	}
@@ -346,6 +368,9 @@ func (c *Config) Validate() error {
 	if c.MaxFileSize < 0 {
 		errs = append(errs, errors.New("MaxFileSize must not be negative"))
 	}
+	if c.WriteBatchSize < 0 {
+		errs = append(errs, errors.New("WriteBatchSize must not be negative"))
+	}
 	if c.PollInterval < 0 {
 		errs = append(errs, errors.New("PollInterval must not be negative"))
 	}
@@ -354,6 +379,9 @@ func (c *Config) Validate() error {
 	}
 	if c.EmbeddingRetryBaseDelay < 0 {
 		errs = append(errs, errors.New("EmbeddingRetryBaseDelay must not be negative"))
+	}
+	if c.EmbeddingHTTPTimeout < 0 {
+		errs = append(errs, errors.New("EmbeddingHTTPTimeout must not be negative"))
 	}
 	if c.EmbeddingBaseURL != "" {
 		u, err := url.ParseRequestURI(c.EmbeddingBaseURL)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -159,6 +160,18 @@ func TestProgressModel_View(t *testing.T) {
 
 func TestProgressReporter_Atomics(t *testing.T) {
 	r := &progressReporter{}
+
+	r.FileStarted("starting.go")
+	if got := r.currentFile(); got != "starting.go" {
+		t.Errorf("currentFile after FileStarted = %q; want starting.go", got)
+	}
+	if got := r.processed.Load(); got != 0 {
+		t.Errorf("processed after FileStarted = %d; want 0", got)
+	}
+	if got := r.skipped.Load(); got != 0 {
+		t.Errorf("skipped after FileStarted = %d; want 0", got)
+	}
+
 	r.FileProcessed("a.go")
 	r.FileProcessed("b.go")
 	r.FileSkipped("c.go")
@@ -176,7 +189,7 @@ func TestProgressReporter_Atomics(t *testing.T) {
 func TestProgressReporter_CurrentFileBeforeFirstStore(t *testing.T) {
 	r := &progressReporter{}
 	if got := r.currentFile(); got != "" {
-		t.Errorf("currentFile before any FileProcessed call = %q; want empty string", got)
+		t.Errorf("currentFile before any FileStarted call = %q; want empty string", got)
 	}
 }
 
@@ -189,5 +202,22 @@ func TestNewProgressTUI_NonTTY(t *testing.T) {
 	}
 	if reporter != nil {
 		t.Error("expected reporter=nil in non-TTY environment")
+	}
+}
+
+// TestProgressReporter_FileFailed_RecordsAndSurfacesPath verifies that
+// FileFailed accumulates failed paths for the final summary without
+// disrupting in-progress reporting.
+func TestProgressReporter_FileFailed_RecordsAndSurfacesPath(t *testing.T) {
+	r := newProgressReporter()
+	r.FileFailed("/tmp/foo.go", errors.New("embed: simulated"))
+	r.FileFailed("/tmp/bar.go", errors.New("embed: simulated"))
+
+	failed := r.FailedFiles()
+	if len(failed) != 2 {
+		t.Fatalf("FailedFiles() len = %d, want 2", len(failed))
+	}
+	if failed[0] != "/tmp/foo.go" || failed[1] != "/tmp/bar.go" {
+		t.Errorf("failed = %v, want order preserved", failed)
 	}
 }

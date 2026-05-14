@@ -27,6 +27,17 @@ func (f *fakeEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float3
 	return result, nil
 }
 
+func (f *fakeEmbedder) EmbedBatchPartial(ctx context.Context, texts []string) ([][]float32, []error) {
+	vectors, err := f.EmbedBatch(ctx, texts)
+	errs := make([]error, len(texts))
+	if err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+	}
+	return vectors, errs
+}
+
 func TestQuerier_Search(t *testing.T) {
 	dim := 3
 	dbPath := t.TempDir() + "/test.db"
@@ -94,7 +105,7 @@ func TestQuerier_SearchWithOptions_PathFilter(t *testing.T) {
 			Embedding: []float32{0.9, 0.1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -133,7 +144,7 @@ func TestQuerier_SearchWithOptions_Offset(t *testing.T) {
 		{ID: "r2", FilePath: "b.go", Language: "go", Content: "func b(){}", ContentHash: "h2", NodeKind: "fn", Name: "b", Embedding: []float32{0.9, 0.1, 0}},
 		{ID: "r3", FilePath: "c.go", Language: "go", Content: "func c(){}", ContentHash: "h3", NodeKind: "fn", Name: "c", Embedding: []float32{0.8, 0.2, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -212,7 +223,7 @@ func TestQuerier_Map_BasicOutput(t *testing.T) {
 			StartLine: 5, EndLine: 15, Embedding: []float32{0, 0, 1},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -271,7 +282,7 @@ func TestQuerier_Map_Truncation(t *testing.T) {
 			StartLine: 1, EndLine: 10, Embedding: []float32{1, 0, 0},
 		})
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -332,7 +343,7 @@ func TestQuerier_Map_NestedSymbolsIndented(t *testing.T) {
 			StartLine: 30, EndLine: 40, Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -368,7 +379,7 @@ func TestQuerier_SearchWithOptions_MaxTokens(t *testing.T) {
 		{ID: "r2", FilePath: "b.go", Language: "go", Content: content + "2", ContentHash: "h2", NodeKind: "fn", Name: "b", Embedding: []float32{0.9, 0.1, 0}},
 		{ID: "r3", FilePath: "c.go", Language: "go", Content: content + "3", ContentHash: "h3", NodeKind: "fn", Name: "c", Embedding: []float32{0.8, 0.2, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -436,7 +447,7 @@ func TestQuerier_SearchWithOptions_MaxTokens_AlwaysOneResult(t *testing.T) {
 	records := []store.Record{
 		{ID: "r1", FilePath: "a.go", Language: "go", Content: strings.Repeat("x", 1000), ContentHash: "h1", NodeKind: "fn", Name: "a", Embedding: []float32{1, 0, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -477,6 +488,17 @@ func (c *countingEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]fl
 	return result, nil
 }
 
+func (c *countingEmbedder) EmbedBatchPartial(ctx context.Context, texts []string) ([][]float32, []error) {
+	vectors, err := c.EmbedBatch(ctx, texts)
+	errs := make([]error, len(texts))
+	if err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+	}
+	return vectors, errs
+}
+
 func TestQuerier_CacheHit(t *testing.T) {
 	dim := 3
 	dbPath := t.TempDir() + "/test.db"
@@ -495,28 +517,28 @@ func TestQuerier_CacheHit(t *testing.T) {
 			Embedding: []float32{1, 0, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
 	emb := &countingEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, s)
 
-	if _, err := q.Search(ctx, "main function", 10); err != nil {
+	if _, err = q.Search(ctx, "main function", 10); err != nil {
 		t.Fatalf("first search: %v", err)
 	}
 	if emb.calls.Load() != 1 {
 		t.Fatalf("expected 1 embedder call after first search, got %d", emb.calls.Load())
 	}
 
-	if _, err := q.Search(ctx, "main function", 10); err != nil {
+	if _, err = q.Search(ctx, "main function", 10); err != nil {
 		t.Fatalf("second search: %v", err)
 	}
 	if emb.calls.Load() != 1 {
 		t.Errorf("expected 1 embedder call after cached search, got %d", emb.calls.Load())
 	}
 
-	if _, err := q.Search(ctx, "different query", 10); err != nil {
+	if _, err = q.Search(ctx, "different query", 10); err != nil {
 		t.Fatalf("third search: %v", err)
 	}
 	if emb.calls.Load() != 2 {
@@ -548,7 +570,7 @@ func TestQuerier_SearchWithOptions_PackageFilter(t *testing.T) {
 			Embedding: []float32{0.9, 0.1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -590,7 +612,7 @@ func TestQuerier_Map_AllOptionsZeroValue(t *testing.T) {
 			StartLine: 1, EndLine: 10, Embedding: []float32{1, 0, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -643,7 +665,7 @@ func TestQuerier_Map_CodeOnlyFilter(t *testing.T) {
 			StartLine: 1, EndLine: 1, Embedding: []float32{0, 0, 1},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -703,7 +725,7 @@ func TestQuerier_Map_LineRanges(t *testing.T) {
 			StartLine: 42, EndLine: 42, Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -752,7 +774,7 @@ func TestQuerier_Map_FileSummary(t *testing.T) {
 		NodeKind: "type_spec", Name: "BigType", Parent: "",
 		StartLine: 50, EndLine: 60, Embedding: []float32{0, 1, 0},
 	})
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -796,7 +818,7 @@ func TestQuerier_Map_Visibility(t *testing.T) {
 			StartLine: 30, EndLine: 40, Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -839,7 +861,7 @@ func TestQuerier_Map_VisibilityPython(t *testing.T) {
 			StartLine: 5, EndLine: 6, Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -882,7 +904,7 @@ func TestQuerier_Map_VisibilityJSExport(t *testing.T) {
 			StartLine: 5, EndLine: 7, Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -937,7 +959,7 @@ func TestQuerier_Map_NestingHierarchy(t *testing.T) {
 			StartLine: 45, EndLine: 55, Embedding: []float32{0.5, 0.5, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -995,7 +1017,7 @@ func TestQuerier_Map_OrphanChildren(t *testing.T) {
 			StartLine: 10, EndLine: 20, Embedding: []float32{1, 0, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1042,7 +1064,7 @@ func TestQuerier_Map_CodeOnlyCustomLanguages(t *testing.T) {
 			StartLine: 1, EndLine: 1, Embedding: []float32{0, 0, 1},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1093,7 +1115,7 @@ func TestQuerier_Map_CodeOnlyEmptyList(t *testing.T) {
 			StartLine: 1, EndLine: 1, Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 

@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,18 +29,30 @@ type indexDoneMsg struct {
 	skipped   int64
 }
 
-// progressReporter implements indexer.Progress using lock-free atomic counters.
+// progressReporter implements indexer.Progress using lock-free atomic counters
+// for processed/skipped counts and a mutex-guarded slice for failed paths.
 // All methods are safe for concurrent use from any number of goroutines.
 type progressReporter struct {
 	processed atomic.Int64
 	skipped   atomic.Int64
-	// current stores a string; Load() returns nil before the first FileProcessed
-	// call, not "" — see currentFile().
-	current atomic.Value
+	// current stores a string; Load() returns nil before the first FileStarted
+	// or FileProcessed call, not "" — see currentFile().
+	current  atomic.Value
+	failedMu sync.Mutex
+	failed   []string
+}
+
+// newProgressReporter returns a zero-value progressReporter ready for use.
+func newProgressReporter() *progressReporter {
+	return &progressReporter{}
 }
 
 // compile-time interface check
 var _ indexer.Progress = (*progressReporter)(nil)
+
+func (r *progressReporter) FileStarted(path string) {
+	r.current.Store(path)
+}
 
 func (r *progressReporter) FileProcessed(path string) {
 	r.processed.Add(1)
@@ -47,6 +61,29 @@ func (r *progressReporter) FileProcessed(path string) {
 
 func (r *progressReporter) FileSkipped(_ string) {
 	r.skipped.Add(1)
+}
+
+func (r *progressReporter) FileFailed(path string, err error) {
+	r.failedMu.Lock()
+	r.failed = append(r.failed, path)
+	r.failedMu.Unlock()
+	// Progress interface is deliberately context-free; use slog.Warn (not
+	// WarnContext) rather than passing context.Background() which suppresses
+	// trace propagation silently. Per-chunk failures are already logged with
+	// the active ctx in indexer.processStageBatch.
+	slog.Warn("indexing failed for file",
+		slog.String("path", path),
+		slog.Any("error", err))
+}
+
+// FailedFiles returns the list of paths that failed indexing during this run.
+// Safe to call from the main goroutine after Index returns.
+func (r *progressReporter) FailedFiles() []string {
+	r.failedMu.Lock()
+	defer r.failedMu.Unlock()
+	out := make([]string, len(r.failed))
+	copy(out, r.failed)
+	return out
 }
 
 // currentFile reads the atomic string safely. atomic.Value.Load() returns nil
@@ -163,5 +200,5 @@ func newProgressTUI(cancel context.CancelFunc) (*tea.Program, *progressReporter)
 		tea.WithOutput(os.Stderr),
 		tea.WithoutSignalHandler(),
 	)
-	return p, &progressReporter{}
+	return p, newProgressReporter()
 }

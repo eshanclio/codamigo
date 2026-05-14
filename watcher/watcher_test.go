@@ -43,7 +43,7 @@ func TestPollWatcher_DetectsNewFile(t *testing.T) {
 		synctest.Wait()
 
 		// Create a new file.
-		if err := os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\nfunc new() {}"), 0o644); err != nil {
+		if err = os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\nfunc new() {}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -92,7 +92,7 @@ func TestPollWatcher_DetectsModification(t *testing.T) {
 
 		// Modify the file (ensure different ModTime).
 		synctest.Wait()
-		if err := os.WriteFile(path, []byte("package main\nfunc modified() {}"), 0o644); err != nil {
+		if err = os.WriteFile(path, []byte("package main\nfunc modified() {}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -139,7 +139,7 @@ func TestPollWatcher_DetectsRemoval(t *testing.T) {
 		ch := w.Watch(ctx)
 		synctest.Wait()
 
-		if err := os.Remove(path); err != nil {
+		if err = os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 
@@ -223,7 +223,7 @@ func TestFSNotifyWatcher_DetectsNewFile(t *testing.T) {
 	// Give the watcher time to set up watches.
 	time.Sleep(200 * time.Millisecond)
 
-	if err := os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\nfunc new() {}"), 0o644); err != nil {
+	if err = os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\nfunc new() {}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -268,7 +268,7 @@ func TestFSNotifyWatcher_DetectsRemoval(t *testing.T) {
 	ch := w.Watch(ctx)
 	time.Sleep(200 * time.Millisecond)
 
-	if err := os.Remove(path); err != nil {
+	if err = os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 
@@ -362,7 +362,7 @@ func TestFSNotifyWatcher_DetectsModification(t *testing.T) {
 	ch := w.Watch(ctx)
 	time.Sleep(200 * time.Millisecond)
 
-	if err := os.WriteFile(path, []byte("package main\nfunc modified() {}"), 0o644); err != nil {
+	if err = os.WriteFile(path, []byte("package main\nfunc modified() {}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -414,10 +414,10 @@ func TestPollWatcher_MatchFnFilters(t *testing.T) {
 
 		// Write both files atomically before any poll fires, so neither is
 		// missed due to a race between two separate poll cycles.
-		if err := os.WriteFile(filepath.Join(root, "ignored.log"), []byte("log data"), 0o644); err != nil {
+		if err = os.WriteFile(filepath.Join(root, "ignored.log"), []byte("log data"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644); err != nil {
+		if err = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 

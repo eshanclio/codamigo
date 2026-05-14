@@ -82,7 +82,7 @@ func CallAPI(ctx context.Context, client *http.Client, baseURL, apiKey string, r
 	}
 
 	var embResp EmbeddingResponse
-	if err := json.Unmarshal(respBody, &embResp); err != nil {
+	if err = json.Unmarshal(respBody, &embResp); err != nil {
 		return nil, fmt.Errorf("decoding embedding response: %w", err)
 	}
 

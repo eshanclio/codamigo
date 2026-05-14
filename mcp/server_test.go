@@ -37,6 +37,17 @@ func (f *fakeEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float3
 	return result, nil
 }
 
+func (f *fakeEmbedder) EmbedBatchPartial(ctx context.Context, texts []string) ([][]float32, []error) {
+	vectors, err := f.EmbedBatch(ctx, texts)
+	errs := make([]error, len(texts))
+	if err != nil {
+		for i := range errs {
+			errs[i] = err
+		}
+	}
+	return vectors, errs
+}
+
 func setupTestServer(t *testing.T) *mcp.Server {
 	t.Helper()
 	dim := 3

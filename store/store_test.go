@@ -53,7 +53,7 @@ func TestContentHash(t *testing.T) {
 
 func testDB(t *testing.T) string {
 	t.Helper()
-	return t.TempDir() + "/test.db"
+	return ":memory:"
 }
 
 func TestNewSQLiteStore(t *testing.T) {
@@ -65,14 +65,14 @@ func TestNewSQLiteStore(t *testing.T) {
 }
 
 func TestNewSQLiteStore_MetadataPersisted(t *testing.T) {
-	dbPath := testDB(t)
+	dbPath := t.TempDir() + "/test.db"
 
 	s, err := store.NewSQLiteStore(dbPath, "test-model", 3)
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	v, err := s.Meta(ctx, "embedding_model")
 	if err != nil {
 		t.Fatalf("Meta: %v", err)
@@ -90,7 +90,7 @@ func TestNewSQLiteStore_MetadataPersisted(t *testing.T) {
 }
 
 func TestNewSQLiteStore_ModelMismatch(t *testing.T) {
-	dbPath := testDB(t)
+	dbPath := t.TempDir() + "/test.db"
 
 	s, err := store.NewSQLiteStore(dbPath, "model-a", 3)
 	if err != nil {
@@ -105,7 +105,7 @@ func TestNewSQLiteStore_ModelMismatch(t *testing.T) {
 }
 
 func TestNewSQLiteStore_DimMismatch(t *testing.T) {
-	dbPath := testDB(t)
+	dbPath := t.TempDir() + "/test.db"
 
 	s, err := store.NewSQLiteStore(dbPath, "model-a", 3)
 	if err != nil {
@@ -151,13 +151,13 @@ func TestCheckpoint(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	r := makeRecord("main.go", "main", "func main() {}", []float32{0.1, 0.2, 0.3})
-	if err := s.Upsert(ctx, []store.Record{r}); err != nil {
+	if err = s.Upsert(ctx, []store.Record{r}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	if err := s.Checkpoint(ctx); err != nil {
+	if err = s.Checkpoint(ctx); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 }
@@ -185,19 +185,19 @@ func TestUpsert_and_Delete(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	r := makeRecord("main.go", "main", "func main() {}", []float32{0.1, 0.2, 0.3})
 
-	if err := s.Upsert(ctx, []store.Record{r}); err != nil {
+	if err = s.Upsert(ctx, []store.Record{r}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
 	// Upsert again should not error (idempotent).
-	if err := s.Upsert(ctx, []store.Record{r}); err != nil {
+	if err = s.Upsert(ctx, []store.Record{r}); err != nil {
 		t.Fatalf("Upsert idempotent: %v", err)
 	}
 
-	if err := s.Delete(ctx, []string{r.ID}); err != nil {
+	if err = s.Delete(ctx, []string{r.ID}); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 }
@@ -209,14 +209,14 @@ func TestUpsert_BatchMultipleRecords(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		makeRecord("a.go", "funcA", "func A() {}", []float32{0.1, 0.2, 0.3}),
 		makeRecord("b.go", "funcB", "func B() {}", []float32{0.4, 0.5, 0.6}),
 		makeRecord("c.go", "funcC", "func C() {}", []float32{0.7, 0.8, 0.9}),
 	}
 
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("Upsert batch: %v", err)
 	}
 }
@@ -228,18 +228,18 @@ func TestDeleteByFile(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		makeRecord("main.go", "funcA", "func A() {}", []float32{0.1, 0.2, 0.3}),
 		makeRecord("main.go", "funcB", "func B() {}", []float32{0.4, 0.5, 0.6}),
 		makeRecord("other.go", "funcC", "func C() {}", []float32{0.7, 0.8, 0.9}),
 	}
 
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	if err := s.DeleteByFile(ctx, "main.go"); err != nil {
+	if err = s.DeleteByFile(ctx, "main.go"); err != nil {
 		t.Fatalf("DeleteByFile: %v", err)
 	}
 
@@ -269,7 +269,7 @@ func TestUpsert_WrongEmbeddingDimension(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	r := makeRecord("main.go", "main", "func main() {}", []float32{0.1, 0.2, 0.3, 0.4}) // 4 floats, store expects 3
 	if err := s.Upsert(ctx, []store.Record{r}); err == nil {
 		t.Fatal("expected error for wrong embedding dimension, got nil")
@@ -283,54 +283,55 @@ func TestUpsert_EmptySlice(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
-	if err := s.Upsert(ctx, nil); err != nil {
+	ctx := t.Context()
+	if err = s.Upsert(ctx, nil); err != nil {
 		t.Fatalf("Upsert nil: %v", err)
 	}
-	if err := s.Upsert(ctx, []store.Record{}); err != nil {
+	if err = s.Upsert(ctx, []store.Record{}); err != nil {
 		t.Fatalf("Upsert empty: %v", err)
 	}
 }
 
-func TestFileHash_and_SetFileHash(t *testing.T) {
+func TestFileHashes(t *testing.T) {
 	s, err := store.NewSQLiteStore(testDB(t), "test-model", 3)
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
 	defer s.Close()
+	ctx := t.Context()
 
-	ctx := context.Background()
-
-	hash, err := s.FileHash(ctx, "main.go")
+	// No files yet — query should return empty map.
+	hashes, err := s.FileHashes(ctx, []string{"main.go"})
 	if err != nil {
-		t.Fatalf("FileHash not-found: %v", err)
+		t.Fatalf("FileHashes not-found: %v", err)
 	}
-	if hash != "" {
-		t.Errorf("expected empty string for missing file, got %q", hash)
-	}
-
-	if err := s.SetFileHash(ctx, "main.go", "abc123"); err != nil {
-		t.Fatalf("SetFileHash: %v", err)
+	if len(hashes) != 0 {
+		t.Errorf("expected empty map for missing file, got %v", hashes)
 	}
 
-	hash, err = s.FileHash(ctx, "main.go")
+	// Set a file hash via ReplaceByFiles (empty records = hash-only entry).
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{{FilePath: "main.go", FileHash: "abc123"}}); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
+	}
+
+	hashes, err = s.FileHashes(ctx, []string{"main.go"})
 	if err != nil {
-		t.Fatalf("FileHash after set: %v", err)
+		t.Fatalf("FileHashes after set: %v", err)
 	}
-	if hash != "abc123" {
-		t.Errorf("FileHash = %q, want %q", hash, "abc123")
+	if hashes["main.go"] != "abc123" {
+		t.Errorf("FileHashes = %q, want %q", hashes["main.go"], "abc123")
 	}
 
 	// Update should work.
-	if err := s.SetFileHash(ctx, "main.go", "def456"); err != nil {
-		t.Fatalf("SetFileHash update: %v", err)
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{{FilePath: "main.go", FileHash: "def456"}}); err != nil {
+		t.Fatalf("ReplaceByFiles update: %v", err)
 	}
-	hash, err = s.FileHash(ctx, "main.go")
+	hashes, err = s.FileHashes(ctx, []string{"main.go"})
 	if err != nil {
-		t.Fatalf("FileHash after update: %v", err)
+		t.Fatalf("FileHashes after update: %v", err)
 	}
-	if hash != "def456" {
-		t.Errorf("FileHash after update = %q, want %q", hash, "def456")
+	if hashes["main.go"] != "def456" {
+		t.Errorf("FileHashes after update = %q, want %q", hashes["main.go"], "def456")
 	}
 }
 
@@ -341,7 +342,7 @@ func TestListFiles(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	files, err := s.ListFiles(ctx)
 	if err != nil {
@@ -351,11 +352,11 @@ func TestListFiles(t *testing.T) {
 		t.Errorf("expected 0 files, got %d", len(files))
 	}
 
-	if err := s.SetFileHash(ctx, "a.go", "hash1"); err != nil {
-		t.Fatalf("SetFileHash a.go: %v", err)
-	}
-	if err := s.SetFileHash(ctx, "b.go", "hash2"); err != nil {
-		t.Fatalf("SetFileHash b.go: %v", err)
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{
+		{FilePath: "a.go", FileHash: "hash1"},
+		{FilePath: "b.go", FileHash: "hash2"},
+	}); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
 	}
 
 	files, err = s.ListFiles(ctx)
@@ -374,14 +375,14 @@ func TestSearch_VectorOnly(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		makeRecord("a.go", "funcA", "func handleAuth() { validateToken() }", []float32{0.9, 0.1, 0.0}),
 		makeRecord("b.go", "funcB", "func handlePayment() { chargeCard() }", []float32{0.0, 0.9, 0.1}),
 		makeRecord("c.go", "funcC", "func handleLogging() { writeLog() }", []float32{0.1, 0.0, 0.9}),
 	}
 
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -410,14 +411,14 @@ func TestSearch_BM25Only(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		makeRecord("a.go", "parseConfig", "func parseConfig() { readYAML() }", []float32{0.5, 0.5, 0.0}),
 		makeRecord("b.go", "parseArgs", "func parseArgs() { flag.Parse() }", []float32{0.5, 0.0, 0.5}),
 		makeRecord("c.go", "handleAuth", "func handleAuth() { validateJWT() }", []float32{0.0, 0.5, 0.5}),
 	}
 
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -446,14 +447,14 @@ func TestSearch_HybridMerge(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		makeRecord("a.go", "parseConfig", "func parseConfig() { readYAML() }", []float32{0.9, 0.1, 0.0}),
 		makeRecord("b.go", "loadConfig", "func loadConfig() { openFile() }", []float32{0.85, 0.15, 0.0}),
 		makeRecord("c.go", "unrelated", "func unrelated() { doStuff() }", []float32{0.0, 0.0, 1.0}),
 	}
 
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -484,14 +485,14 @@ func TestSearch_LanguageFilter(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	goRecord := makeRecord("main.go", "main", "func main() {}", []float32{0.9, 0.1, 0.0})
 	goRecord.Language = "go"
 
 	pyRecord := makeRecord("main.py", "main", "def main(): pass", []float32{0.85, 0.1, 0.05})
 	pyRecord.Language = "python"
 
-	if err := s.Upsert(ctx, []store.Record{goRecord, pyRecord}); err != nil {
+	if err = s.Upsert(ctx, []store.Record{goRecord, pyRecord}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -519,7 +520,7 @@ func TestSearch_EmptyStore(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	results, err := s.Search(ctx, store.SearchQuery{
 		Embedding: []float32{0.1, 0.2, 0.3},
 		Text:      "anything",
@@ -540,11 +541,11 @@ func TestEmbeddingsByContentHash(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	r1 := makeRecord("a.go", "funcA", "func A() {}", []float32{0.1, 0.2, 0.3})
 	r2 := makeRecord("b.go", "funcB", "func B() {}", []float32{0.4, 0.5, 0.6})
 
-	if err := s.Upsert(ctx, []store.Record{r1, r2}); err != nil {
+	if err = s.Upsert(ctx, []store.Record{r1, r2}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -575,7 +576,7 @@ func TestSearch_PathFilter(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -597,7 +598,7 @@ func TestSearch_PathFilter(t *testing.T) {
 			Embedding: []float32{0.8, 0.2, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -639,7 +640,7 @@ func TestSearch_PathFilter_Empty(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{
@@ -649,7 +650,7 @@ func TestSearch_PathFilter_Empty(t *testing.T) {
 			Embedding: []float32{1, 0, 0},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -677,19 +678,19 @@ func TestNewSQLiteStore_CreatesDirectory(t *testing.T) {
 	}
 	defer s.Close()
 
-	if _, err := os.Stat(filepath.Join(dir, "nested", "subdir")); errors.Is(err, fs.ErrNotExist) {
+	if _, err = os.Stat(filepath.Join(dir, "nested", "subdir")); errors.Is(err, fs.ErrNotExist) {
 		t.Error("NewSQLiteStore did not create nested directory")
 	}
 }
 
 func TestSQLiteStore_SearchOffset(t *testing.T) {
 	dim := 3
-	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "m", dim)
+	s, err := store.NewSQLiteStore(testDB(t), "m", dim)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := []store.Record{
 		{ID: "a", FilePath: "a.go", Language: "go", Content: "alpha", ContentHash: "h1", NodeKind: "fn", Embedding: []float32{1, 0, 0}},
@@ -697,7 +698,7 @@ func TestSQLiteStore_SearchOffset(t *testing.T) {
 		{ID: "c", FilePath: "c.go", Language: "go", Content: "gamma", ContentHash: "h3", NodeKind: "fn", Embedding: []float32{0.8, 0.2, 0}},
 		{ID: "d", FilePath: "d.go", Language: "go", Content: "delta", ContentHash: "h4", NodeKind: "fn", Embedding: []float32{0.7, 0.3, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -735,12 +736,12 @@ func TestSQLiteStore_SearchOffset(t *testing.T) {
 
 func TestSQLiteStore_Stats(t *testing.T) {
 	dim := 3
-	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "m", dim)
+	s, err := store.NewSQLiteStore(testDB(t), "m", dim)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Empty store.
 	stats, err := s.Stats(ctx)
@@ -751,19 +752,16 @@ func TestSQLiteStore_Stats(t *testing.T) {
 		t.Errorf("empty store: want 0/0, got %d/%d", stats.ChunkCount, stats.FileCount)
 	}
 
-	records := []store.Record{
-		{ID: "g1", FilePath: "main.go", Language: "go", Content: "func a(){}", ContentHash: "h1", NodeKind: "fn", Embedding: []float32{1, 0, 0}},
-		{ID: "g2", FilePath: "main.go", Language: "go", Content: "func b(){}", ContentHash: "h2", NodeKind: "fn", Embedding: []float32{0, 1, 0}},
-		{ID: "p1", FilePath: "script.py", Language: "python", Content: "def c():", ContentHash: "h3", NodeKind: "fn", Embedding: []float32{0, 0, 1}},
-	}
-	if err := s.Upsert(ctx, records); err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
-	if err := s.SetFileHash(ctx, "main.go", "fh1"); err != nil {
-		t.Fatalf("set file hash main.go: %v", err)
-	}
-	if err := s.SetFileHash(ctx, "script.py", "fh2"); err != nil {
-		t.Fatalf("set file hash script.py: %v", err)
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{
+		{FilePath: "main.go", FileHash: "fh1", Records: []store.Record{
+			{ID: "g1", FilePath: "main.go", Language: "go", Content: "func a(){}", ContentHash: "h1", NodeKind: "fn", Embedding: []float32{1, 0, 0}},
+			{ID: "g2", FilePath: "main.go", Language: "go", Content: "func b(){}", ContentHash: "h2", NodeKind: "fn", Embedding: []float32{0, 1, 0}},
+		}},
+		{FilePath: "script.py", FileHash: "fh2", Records: []store.Record{
+			{ID: "p1", FilePath: "script.py", Language: "python", Content: "def c():", ContentHash: "h3", NodeKind: "fn", Embedding: []float32{0, 0, 1}},
+		}},
+	}); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
 	}
 
 	stats, err = s.Stats(ctx)
@@ -791,23 +789,19 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// 1. Index two files.
-	records := []store.Record{
-		makeRecord("auth.go", "validateToken", "func validateToken(jwt string) error { return nil }", []float32{0.9, 0.1, 0.0}),
-		makeRecord("auth.go", "refreshToken", "func refreshToken(old string) (string, error) { return old, nil }", []float32{0.8, 0.2, 0.0}),
-		makeRecord("db.go", "openDB", "func openDB(dsn string) (*sql.DB, error) { return nil, nil }", []float32{0.0, 0.9, 0.1}),
-	}
-
-	if err := s.Upsert(ctx, records); err != nil {
-		t.Fatalf("Upsert: %v", err)
-	}
-	if err := s.SetFileHash(ctx, "auth.go", "hash-auth-v1"); err != nil {
-		t.Fatalf("SetFileHash auth.go: %v", err)
-	}
-	if err := s.SetFileHash(ctx, "db.go", "hash-db-v1"); err != nil {
-		t.Fatalf("SetFileHash db.go: %v", err)
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{
+		{FilePath: "auth.go", FileHash: "hash-auth-v1", Records: []store.Record{
+			makeRecord("auth.go", "validateToken", "func validateToken(jwt string) error { return nil }", []float32{0.9, 0.1, 0.0}),
+			makeRecord("auth.go", "refreshToken", "func refreshToken(old string) (string, error) { return old, nil }", []float32{0.8, 0.2, 0.0}),
+		}},
+		{FilePath: "db.go", FileHash: "hash-db-v1", Records: []store.Record{
+			makeRecord("db.go", "openDB", "func openDB(dsn string) (*sql.DB, error) { return nil, nil }", []float32{0.0, 0.9, 0.1}),
+		}},
+	}); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
 	}
 
 	// 2. Verify file tracking.
@@ -819,16 +813,16 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 		t.Errorf("expected 2 files, got %d", len(files))
 	}
 
-	hash, err := s.FileHash(ctx, "auth.go")
+	hashes, err := s.FileHashes(ctx, []string{"auth.go"})
 	if err != nil {
-		t.Fatalf("FileHash: %v", err)
+		t.Fatalf("FileHashes: %v", err)
 	}
-	if hash != "hash-auth-v1" {
-		t.Errorf("FileHash = %q, want %q", hash, "hash-auth-v1")
+	if hashes["auth.go"] != "hash-auth-v1" {
+		t.Errorf("FileHashes = %q, want %q", hashes["auth.go"], "hash-auth-v1")
 	}
 
 	// 3. Verify chunk hash tracking.
-	hashes, err := s.ChunkHashesByFile(ctx, "auth.go")
+	hashes, err = s.ChunkHashesByFile(ctx, "auth.go")
 	if err != nil {
 		t.Fatalf("ChunkHashesByFile: %v", err)
 	}
@@ -866,7 +860,7 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 	}
 
 	// 6. Simulate file deletion: delete auth.go.
-	if err := s.DeleteByFile(ctx, "auth.go"); err != nil {
+	if err = s.DeleteByFile(ctx, "auth.go"); err != nil {
 		t.Fatalf("DeleteByFile: %v", err)
 	}
 
@@ -905,7 +899,7 @@ func TestListSymbols(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{
 			ID: "r1", FilePath: "store/store.go", Language: "go",
@@ -932,7 +926,7 @@ func TestListSymbols(t *testing.T) {
 			StartLine: 1, EndLine: 2, Embedding: []float32{0.1, 0.1, 0.1},
 		},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -977,14 +971,14 @@ func TestListSymbols(t *testing.T) {
 	}
 }
 
-func TestReplaceByFile(t *testing.T) {
+func TestReplaceByFiles(t *testing.T) {
 	dim := 3
 	s, err := store.NewSQLiteStore(testDB(t), "test-model", dim)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	oldRecords := []store.Record{
 		{
@@ -1000,10 +994,10 @@ func TestReplaceByFile(t *testing.T) {
 			Embedding: []float32{0, 1, 0},
 		},
 	}
-	if err := s.Upsert(ctx, oldRecords); err != nil {
+	if err = s.Upsert(ctx, oldRecords); err != nil {
 		t.Fatalf("initial upsert: %v", err)
 	}
-	if err := s.SetFileHash(ctx, "/src/main.go", "hash_v1"); err != nil {
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{{FilePath: "/src/main.go", FileHash: "hash_v1"}}); err != nil {
 		t.Fatalf("set file hash: %v", err)
 	}
 
@@ -1015,16 +1009,16 @@ func TestReplaceByFile(t *testing.T) {
 			Embedding: []float32{0, 0, 1},
 		},
 	}
-	if err := s.ReplaceByFile(ctx, "/src/main.go", newRecords, "hash_v2"); err != nil {
-		t.Fatalf("ReplaceByFile: %v", err)
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{{FilePath: "/src/main.go", Records: newRecords, FileHash: "hash_v2"}}); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
 	}
 
-	hash, err := s.FileHash(ctx, "/src/main.go")
+	hashes, err := s.FileHashes(ctx, []string{"/src/main.go"})
 	if err != nil {
 		t.Fatalf("file hash: %v", err)
 	}
-	if hash != "hash_v2" {
-		t.Errorf("file hash: want hash_v2, got %s", hash)
+	if hashes["/src/main.go"] != "hash_v2" {
+		t.Errorf("file hash: want hash_v2, got %s", hashes["/src/main.go"])
 	}
 
 	results, err := s.Search(ctx, store.SearchQuery{
@@ -1050,14 +1044,14 @@ func TestReplaceByFile(t *testing.T) {
 	}
 }
 
-func TestReplaceByFile_RollbackOnBadEmbedding(t *testing.T) {
+func TestReplaceByFiles_RollbackOnBadEmbedding(t *testing.T) {
 	dim := 3
 	s, err := store.NewSQLiteStore(testDB(t), "test-model", dim)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	oldRecord := store.Record{
 		ID: "old1", FilePath: "/src/main.go", Language: "go",
@@ -1065,10 +1059,7 @@ func TestReplaceByFile_RollbackOnBadEmbedding(t *testing.T) {
 		Name: "old1", StartLine: 1, EndLine: 3,
 		Embedding: []float32{1, 0, 0},
 	}
-	if err := s.Upsert(ctx, []store.Record{oldRecord}); err != nil {
-		t.Fatalf("upsert: %v", err)
-	}
-	if err := s.SetFileHash(ctx, "/src/main.go", "hash_v1"); err != nil {
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{{FilePath: "/src/main.go", FileHash: "hash_v1", Records: []store.Record{oldRecord}}}); err != nil {
 		t.Fatalf("set file hash: %v", err)
 	}
 
@@ -1078,17 +1069,17 @@ func TestReplaceByFile_RollbackOnBadEmbedding(t *testing.T) {
 		Name: "new1", StartLine: 1, EndLine: 3,
 		Embedding: []float32{1, 2}, // wrong dimension
 	}
-	err = s.ReplaceByFile(ctx, "/src/main.go", []store.Record{badRecord}, "hash_v2")
+	err = s.ReplaceByFiles(ctx, []store.FileRecords{{FilePath: "/src/main.go", Records: []store.Record{badRecord}, FileHash: "hash_v2"}})
 	if err == nil {
 		t.Fatal("expected error for wrong embedding dimension, got nil")
 	}
 
-	hash, err := s.FileHash(ctx, "/src/main.go")
+	hashes, err := s.FileHashes(ctx, []string{"/src/main.go"})
 	if err != nil {
 		t.Fatalf("file hash: %v", err)
 	}
-	if hash != "hash_v1" {
-		t.Errorf("file hash should still be hash_v1 after rollback, got %s", hash)
+	if hashes["/src/main.go"] != "hash_v1" {
+		t.Errorf("file hash should still be hash_v1 after failed write, got %s", hashes["/src/main.go"])
 	}
 
 	results, err := s.Search(ctx, store.SearchQuery{
@@ -1106,7 +1097,147 @@ func TestReplaceByFile_RollbackOnBadEmbedding(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("old record should survive after failed ReplaceByFile")
+		t.Error("old record should survive after failed ReplaceByFiles")
+	}
+}
+
+func TestReplaceByFiles_MultiFile(t *testing.T) {
+	s, err := store.NewSQLiteStore(testDB(t), "test-model", 3)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer s.Close()
+	ctx := t.Context()
+
+	entries := []store.FileRecords{
+		{
+			FilePath: "/proj/a.go",
+			FileHash: "hash-a",
+			Records: []store.Record{
+				{
+					ID:       store.RecordID("/proj/a.go", "func A() {}"),
+					FilePath: "/proj/a.go", Language: "go",
+					Content: "func A() {}", ContentHash: store.ContentHash([]byte("func A() {}")),
+					NodeKind: "function_declaration", Name: "A",
+					StartLine: 1, EndLine: 1,
+					Embedding: []float32{1, 0, 0},
+				},
+			},
+		},
+		{
+			FilePath: "/proj/b.go",
+			FileHash: "hash-b",
+			Records: []store.Record{
+				{
+					ID:       store.RecordID("/proj/b.go", "func B() {}"),
+					FilePath: "/proj/b.go", Language: "go",
+					Content: "func B() {}", ContentHash: store.ContentHash([]byte("func B() {}")),
+					NodeKind: "function_declaration", Name: "B",
+					StartLine: 1, EndLine: 1,
+					Embedding: []float32{0, 1, 0},
+				},
+			},
+		},
+		{
+			FilePath: "/proj/c.go",
+			FileHash: "hash-c",
+			Records: []store.Record{
+				{
+					ID:       store.RecordID("/proj/c.go", "func C() {}"),
+					FilePath: "/proj/c.go", Language: "go",
+					Content: "func C() {}", ContentHash: store.ContentHash([]byte("func C() {}")),
+					NodeKind: "function_declaration", Name: "C",
+					StartLine: 1, EndLine: 1,
+					Embedding: []float32{0, 0, 1},
+				},
+			},
+		},
+	}
+
+	if err = s.ReplaceByFiles(ctx, entries); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
+	}
+
+	files, err := s.ListFiles(ctx)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(files) != 3 {
+		t.Errorf("expected 3 files, got %d", len(files))
+	}
+
+	hashes, err := s.FileHashes(ctx, []string{"/proj/a.go", "/proj/b.go", "/proj/c.go"})
+	if err != nil {
+		t.Fatalf("FileHashes: %v", err)
+	}
+	if hashes["/proj/a.go"] != "hash-a" {
+		t.Errorf("a.go hash = %q; want hash-a", hashes["/proj/a.go"])
+	}
+	if hashes["/proj/b.go"] != "hash-b" {
+		t.Errorf("b.go hash = %q; want hash-b", hashes["/proj/b.go"])
+	}
+	if hashes["/proj/c.go"] != "hash-c" {
+		t.Errorf("c.go hash = %q; want hash-c", hashes["/proj/c.go"])
+	}
+
+	stats, err := s.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if stats.ChunkCount != 3 {
+		t.Errorf("chunk count = %d; want 3", stats.ChunkCount)
+	}
+}
+
+func TestFileHashes_Batch(t *testing.T) {
+	s, err := store.NewSQLiteStore(testDB(t), "test-model", 3)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer s.Close()
+	ctx := t.Context()
+
+	entries := []store.FileRecords{
+		{FilePath: "/proj/a.go", FileHash: "hash-a", Records: []store.Record{
+			{ID: "id-a", FilePath: "/proj/a.go", Language: "go", Content: "a", ContentHash: "ch-a", NodeKind: "file", StartLine: 1, EndLine: 1, Embedding: []float32{1, 0, 0}},
+		}},
+		{FilePath: "/proj/b.go", FileHash: "hash-b", Records: []store.Record{
+			{ID: "id-b", FilePath: "/proj/b.go", Language: "go", Content: "b", ContentHash: "ch-b", NodeKind: "file", StartLine: 1, EndLine: 1, Embedding: []float32{0, 1, 0}},
+		}},
+		{FilePath: "/proj/c.go", FileHash: "hash-c", Records: []store.Record{
+			{ID: "id-c", FilePath: "/proj/c.go", Language: "go", Content: "c", ContentHash: "ch-c", NodeKind: "file", StartLine: 1, EndLine: 1, Embedding: []float32{0, 0, 1}},
+		}},
+	}
+	if err := s.ReplaceByFiles(ctx, entries); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
+	}
+
+	// Query for 3 existing + 2 non-existent paths.
+	hashes, err := s.FileHashes(ctx, []string{
+		"/proj/a.go", "/proj/b.go", "/proj/c.go",
+		"/proj/missing1.go", "/proj/missing2.go",
+	})
+	if err != nil {
+		t.Fatalf("FileHashes: %v", err)
+	}
+
+	if len(hashes) != 3 {
+		t.Errorf("expected 3 entries, got %d", len(hashes))
+	}
+	if hashes["/proj/a.go"] != "hash-a" {
+		t.Errorf("a.go = %q; want hash-a", hashes["/proj/a.go"])
+	}
+	if hashes["/proj/b.go"] != "hash-b" {
+		t.Errorf("b.go = %q; want hash-b", hashes["/proj/b.go"])
+	}
+	if hashes["/proj/c.go"] != "hash-c" {
+		t.Errorf("c.go = %q; want hash-c", hashes["/proj/c.go"])
+	}
+	if _, ok := hashes["/proj/missing1.go"]; ok {
+		t.Error("missing1.go should not be in result")
+	}
+	if _, ok := hashes["/proj/missing2.go"]; ok {
+		t.Error("missing2.go should not be in result")
 	}
 }
 
@@ -1118,14 +1249,14 @@ func TestSearch_CombinedFilters(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{ID: "r1", FilePath: "main.go", Language: "go", Content: "func main() {}", ContentHash: "h1", NodeKind: "function_declaration", Name: "main", StartLine: 1, EndLine: 1, Embedding: []float32{1, 0, 0}},
 		{ID: "r2", FilePath: "search.go", Language: "go", Content: "func Search() {}", ContentHash: "h2", NodeKind: "function_declaration", Name: "Search", StartLine: 1, EndLine: 1, Embedding: []float32{0.9, 0.1, 0}},
 		{ID: "r3", FilePath: "types.go", Language: "go", Content: "type Server struct{}", ContentHash: "h3", NodeKind: "type_declaration", Name: "Server", StartLine: 1, EndLine: 1, Embedding: []float32{0.8, 0.2, 0}},
 		{ID: "r4", FilePath: "search.py", Language: "python", Content: "def search(): pass", ContentHash: "h4", NodeKind: "function_definition", Name: "search", StartLine: 1, EndLine: 1, Embedding: []float32{0.85, 0.15, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1157,7 +1288,7 @@ func TestSQLiteStore_SchemaV2_LanguageInVec(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	v, err := s.Meta(ctx, "schema_version")
 	if err != nil {
 		t.Fatalf("reading schema_version: %v", err)
@@ -1174,7 +1305,7 @@ func TestListSymbols_EmptyStore(t *testing.T) {
 	}
 	defer s.Close()
 
-	symbols, err := s.ListSymbols(context.Background())
+	symbols, err := s.ListSymbols(t.Context())
 	if err != nil {
 		t.Fatalf("ListSymbols: %v", err)
 	}
@@ -1191,12 +1322,12 @@ func TestSearch_NameFilter(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{ID: "r1", FilePath: "main.go", Language: "go", Content: "func main() {}", ContentHash: "h1", NodeKind: "function_declaration", Name: "main", StartLine: 1, EndLine: 1, Embedding: []float32{1, 0, 0}},
 		{ID: "r2", FilePath: "search.go", Language: "go", Content: "func Search() {}", ContentHash: "h2", NodeKind: "function_declaration", Name: "Search", StartLine: 1, EndLine: 1, Embedding: []float32{0.9, 0.1, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1225,12 +1356,12 @@ func TestSearch_NodeKindFilter(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{ID: "r1", FilePath: "main.go", Language: "go", Content: "func main() {}", ContentHash: "h1", NodeKind: "function_declaration", Name: "main", StartLine: 1, EndLine: 1, Embedding: []float32{1, 0, 0}},
 		{ID: "r2", FilePath: "types.go", Language: "go", Content: "type Server struct{}", ContentHash: "h2", NodeKind: "type_declaration", Name: "Server", StartLine: 1, EndLine: 1, Embedding: []float32{0.9, 0.1, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1259,11 +1390,11 @@ func TestSearch_MetadataOnly(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{ID: "r1", FilePath: "main.go", Language: "go", Content: "func main() { println(42) }", ContentHash: "h1", NodeKind: "function_declaration", Name: "main", StartLine: 1, EndLine: 1, Embedding: []float32{1, 0, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1298,12 +1429,12 @@ func TestSearch_SingleLanguageKNNPreFilter(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	records := []store.Record{
 		{ID: "r1", FilePath: "main.go", Language: "go", Content: "func main() {}", ContentHash: "h1", NodeKind: "function_declaration", Name: "main", StartLine: 1, EndLine: 1, Embedding: []float32{1, 0, 0}},
 		{ID: "r2", FilePath: "main.py", Language: "python", Content: "def main(): pass", ContentHash: "h2", NodeKind: "function_definition", Name: "main", StartLine: 1, EndLine: 1, Embedding: []float32{0.99, 0.01, 0}},
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1331,7 +1462,7 @@ func TestSearch_BatchFetch(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	records := make([]store.Record, 20)
 	for i := range 20 {
@@ -1345,7 +1476,7 @@ func TestSearch_BatchFetch(t *testing.T) {
 		}
 		records[i].Embedding[i%dim] = 1.0
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1382,7 +1513,7 @@ func TestSearch_IterativeDeepening(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Insert 10 records: 2 Go, 8 Python. All with similar embeddings.
 	var records []store.Record
@@ -1404,7 +1535,7 @@ func TestSearch_IterativeDeepening(t *testing.T) {
 			Embedding:   []float32{1, 0, 0},
 		})
 	}
-	if err := s.Upsert(ctx, records); err != nil {
+	if err = s.Upsert(ctx, records); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
@@ -1436,7 +1567,7 @@ func TestEmbeddingsByContentHash_Deterministic(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Insert two chunks with the same content hash but different IDs/embeddings.
 	// DISTINCT should return a deterministic result (one row per content_hash).
@@ -1456,7 +1587,7 @@ func TestEmbeddingsByContentHash_Deterministic(t *testing.T) {
 		Embedding: []float32{0.4, 0.5, 0.6},
 	}
 
-	if err := s.Upsert(ctx, []store.Record{r1, r2}); err != nil {
+	if err = s.Upsert(ctx, []store.Record{r1, r2}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 
@@ -1492,7 +1623,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	}
 	defer s.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	// Seed initial data.
@@ -1502,7 +1633,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 		Name: "seed", StartLine: 1, EndLine: 1,
 		Embedding: []float32{1, 0, 0},
 	}}
-	if err := s.Upsert(ctx, seed); err != nil {
+	if err = s.Upsert(ctx, seed); err != nil {
 		t.Fatalf("seed upsert: %v", err)
 	}
 
@@ -1523,7 +1654,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 					Name: "f", StartLine: 1, EndLine: 1,
 					Embedding: []float32{1, 0, 0},
 				}}
-				if err := s.ReplaceByFile(ctx, fmt.Sprintf("w%d.go", w), rec, id); err != nil {
+				if err := s.ReplaceByFiles(ctx, []store.FileRecords{{FilePath: fmt.Sprintf("w%d.go", w), Records: rec, FileHash: id}}); err != nil {
 					errCount.Add(1)
 					t.Errorf("writer %d iteration %d: %v", w, i, err)
 				}
@@ -1535,7 +1666,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	for range readers {
 		wg.Go(func() {
 			for range iterations {
-				if _, err := s.Search(ctx, store.SearchQuery{
+				if _, err = s.Search(ctx, store.SearchQuery{
 					Embedding: []float32{1, 0, 0},
 					Text:      "func",
 					Limit:     5,

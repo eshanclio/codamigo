@@ -394,7 +394,7 @@ func readIgnoreFile(ctx context.Context, fsys fs.FS, filePath string) []string {
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
-	if err := scanner.Err(); err != nil {
+	if err = scanner.Err(); err != nil {
 		slog.WarnContext(ctx, "reading ignore file", slog.String("path", filePath), slog.Any("error", err))
 		return lines
 	}

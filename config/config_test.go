@@ -23,6 +23,7 @@ include_patterns:
   - "*.ts"
 poll_interval: 10s
 debounce_window: 250ms
+embedding_http_timeout: 30s
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -46,6 +47,9 @@ debounce_window: 250ms
 	if cfg.DebounceWindow != 250*time.Millisecond {
 		t.Errorf("DebounceWindow = %v, want 250ms", cfg.DebounceWindow)
 	}
+	if cfg.EmbeddingHTTPTimeout != 30*time.Second {
+		t.Errorf("EmbeddingHTTPTimeout = %v, want 30s", cfg.EmbeddingHTTPTimeout)
+	}
 }
 
 func TestLoad_UnknownKey(t *testing.T) {
@@ -61,6 +65,14 @@ func TestLoad_BadDuration(t *testing.T) {
 	_, err := config.Load(path)
 	if err == nil {
 		t.Fatal("expected error for bad duration, got nil")
+	}
+}
+
+func TestLoad_BadEmbeddingHTTPTimeout(t *testing.T) {
+	path := writeTempConfig(t, "embedding_http_timeout: notaduration\n")
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("expected error for bad embedding_http_timeout, got nil")
 	}
 }
 
@@ -143,6 +155,15 @@ func TestMerge_DurationOverride(t *testing.T) {
 	}
 }
 
+func TestMerge_EmbeddingHTTPTimeoutOverlay(t *testing.T) {
+	base := config.Defaults()
+	overlay := &config.Config{EmbeddingHTTPTimeout: 120 * time.Second}
+	result := base.Merge(overlay)
+	if result.EmbeddingHTTPTimeout != 120*time.Second {
+		t.Errorf("EmbeddingHTTPTimeout = %v, want 120s", result.EmbeddingHTTPTimeout)
+	}
+}
+
 func TestMerge_SliceNilDoesNotOverride(t *testing.T) {
 	base := &config.Config{IncludePatterns: []string{"*.go"}}
 	overlay := &config.Config{} // nil slice, not set
@@ -215,6 +236,9 @@ func TestDefaults(t *testing.T) {
 	}
 	if d.ProjectRoot != "" {
 		t.Errorf("ProjectRoot = %q, want empty (resolved at runtime)", d.ProjectRoot)
+	}
+	if d.EmbeddingHTTPTimeout != 60*time.Second {
+		t.Errorf("EmbeddingHTTPTimeout = %v, want 60s", d.EmbeddingHTTPTimeout)
 	}
 }
 
@@ -327,6 +351,7 @@ func TestValidate_InvalidFields(t *testing.T) {
 		{"negative poll interval", func(c *config.Config) { c.PollInterval = -1 }, "PollInterval"},
 		{"negative debounce window", func(c *config.Config) { c.DebounceWindow = -1 }, "DebounceWindow"},
 		{"negative retry base delay", func(c *config.Config) { c.EmbeddingRetryBaseDelay = -1 }, "EmbeddingRetryBaseDelay"},
+		{"negative http timeout", func(c *config.Config) { c.EmbeddingHTTPTimeout = -1 }, "EmbeddingHTTPTimeout"},
 		{"malformed embedding URL", func(c *config.Config) { c.EmbeddingBaseURL = "not a url" }, "EmbeddingBaseURL"},
 		{"ftp embedding URL", func(c *config.Config) { c.EmbeddingBaseURL = "ftp://example.com" }, "EmbeddingBaseURL"},
 		{"empty host embedding URL", func(c *config.Config) { c.EmbeddingBaseURL = "http://" }, "EmbeddingBaseURL"},
@@ -494,5 +519,29 @@ func TestMerge_NonCodeLanguagesNotAliased(t *testing.T) {
 	overlay.NonCodeLanguages[0] = "MUTATED"
 	if result.NonCodeLanguages[0] == "MUTATED" {
 		t.Error("Merge aliased NonCodeLanguages slice; mutation leaked to result")
+	}
+}
+
+func TestWriteBatchSize_Defaults(t *testing.T) {
+	cfg := config.Defaults()
+	if cfg.WriteBatchSize != 50 {
+		t.Errorf("WriteBatchSize default = %d; want 50", cfg.WriteBatchSize)
+	}
+}
+
+func TestWriteBatchSize_Merge(t *testing.T) {
+	base := config.Defaults()
+	overlay := &config.Config{WriteBatchSize: 100}
+	merged := base.Merge(overlay)
+	if merged.WriteBatchSize != 100 {
+		t.Errorf("WriteBatchSize after merge = %d; want 100", merged.WriteBatchSize)
+	}
+}
+
+func TestWriteBatchSize_Validate(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.WriteBatchSize = -1
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for negative WriteBatchSize")
 	}
 }

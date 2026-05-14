@@ -138,7 +138,7 @@ func TestWalk_ContextCancellation(t *testing.T) {
 	cancel() // cancel immediately
 
 	count := 0
-	for _, err := range w.Walk(ctx) {
+	for _, err = range w.Walk(ctx) {
 		if err != nil {
 			break
 		}
@@ -622,7 +622,7 @@ func TestWalker_FSPanicsAfterClose(t *testing.T) {
 		t.Fatalf("walker.New: %v", err)
 	}
 
-	if err := w.Close(); err != nil {
+	if err = w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 

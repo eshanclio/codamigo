@@ -242,6 +242,7 @@ project_root: ""                      # defaults to current working directory
 # Indexing
 index_concurrency: 20                 # files processed concurrently during indexing
 max_file_size: 1048576                # skip files larger than this (bytes); 0 = no limit
+write_batch_size: 50                  # files per DB write transaction during batch indexing; 0 = use default (50)
 
 # File watching (serve only)
 watch_mode: auto                      # "auto" | "fsnotify" | "poll"

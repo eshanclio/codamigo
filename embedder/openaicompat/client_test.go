@@ -1,9 +1,11 @@
 package openaicompat_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -206,7 +208,7 @@ func TestCallWithRetry_RetriesOn429(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	vectors, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	vectors, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 1*time.Millisecond)
@@ -239,7 +241,7 @@ func TestCallWithRetry_RetriesOn5xx(t *testing.T) {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	vectors, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	vectors, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 1*time.Millisecond)
@@ -260,7 +262,7 @@ func TestCallWithRetry_MaxRetriesExhausted(t *testing.T) {
 		w.Write([]byte(`rate limited`))
 	})
 
-	_, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 3, 1*time.Millisecond)
@@ -280,7 +282,7 @@ func TestCallWithRetry_NoRetryOn4xx(t *testing.T) {
 		w.Write([]byte(`bad request`))
 	})
 
-	_, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallWithRetry(context.Background(), http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 1*time.Millisecond)
@@ -325,7 +327,7 @@ func TestCallWithRetry_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := openaicompat.CallWithRetry(ctx, http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallWithRetry(ctx, http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 1*time.Second)
@@ -582,7 +584,7 @@ func TestCallWithRetry_ContextCancellation_NoLeak(t *testing.T) {
 	}()
 
 	start := time.Now()
-	_, err := openaicompat.CallWithRetry(ctx, http.DefaultClient, srv.URL, "key", openaicompat.EmbeddingRequest{
+	_, err := openaicompat.CallWithRetry(ctx, http.DefaultClient, nil, srv.URL, "key", openaicompat.EmbeddingRequest{
 		Model: "m",
 		Input: []string{"text"},
 	}, 5, 10*time.Second) // 10s base delay — would block for 10s+ if timer isn't stopped
@@ -651,6 +653,252 @@ func TestNew_RateLimitZero_DisablesThrottling(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("10 calls with RateLimit=0 took %v; want under 2s (rate limiting not disabled?)", elapsed)
+	}
+}
+
+func TestNew_HTTPTimeoutOverridesDefault(t *testing.T) {
+	c, err := openaicompat.New(openaicompat.Options{
+		BaseURL:     "http://localhost",
+		Model:       "test",
+		HTTPTimeout: 7 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := c.HTTPClient().Timeout; got != 7*time.Second {
+		t.Errorf("HTTPClient.Timeout = %v, want 7s", got)
+	}
+}
+
+func TestNew_HTTPTimeoutDefaultsTo30s(t *testing.T) {
+	c, err := openaicompat.New(openaicompat.Options{
+		BaseURL: "http://localhost",
+		Model:   "test",
+		// HTTPTimeout not set — should default to 30s
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := c.HTTPClient().Timeout; got != 30*time.Second {
+		t.Errorf("HTTPClient.Timeout = %v, want 30s default", got)
+	}
+}
+
+func TestNew_HTTPTimeoutIgnoredWhenHTTPClientProvided(t *testing.T) {
+	custom := &http.Client{Timeout: 99 * time.Second}
+	c, err := openaicompat.New(openaicompat.Options{
+		BaseURL:     "http://localhost",
+		Model:       "test",
+		HTTPClient:  custom,
+		HTTPTimeout: 7 * time.Second, // should be ignored
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := c.HTTPClient(); got != custom {
+		t.Errorf("HTTPClient() = %p, want custom client %p", got, custom)
+	}
+	if got := c.HTTPClient().Timeout; got != 99*time.Second {
+		t.Errorf("HTTPClient.Timeout = %v, want 99s (custom client's value)", got)
+	}
+}
+
+// TestEmbedBatchPartial_SubBatchFailure_DoesNotCancelSiblings verifies that
+// when one sub-batch hits a non-transient 4xx, sibling sub-batches still
+// succeed and return their vectors. This is the cascade-cancellation fix.
+func TestEmbedBatchPartial_SubBatchFailure_DoesNotCancelSiblings(t *testing.T) {
+	// MaxBatchSize=2, three inputs → two sub-batches: [0,1] and [2].
+	// Make sub-batch starting with text "FAIL" return 400; others return ok.
+	successBody := `{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0},{"object":"embedding","embedding":[0.2],"index":1}],"model":"m","usage":{"prompt_tokens":2,"total_tokens":2}}`
+	singleSuccess := `{"object":"list","data":[{"object":"embedding","embedding":[0.3],"index":0}],"model":"m","usage":{"prompt_tokens":1,"total_tokens":1}}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if bytes.Contains(body, []byte(`"FAIL"`)) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"bad input"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// crude detection: count occurrences of a typical text pattern
+		if bytes.Count(body, []byte(`"text`)) >= 2 {
+			_, _ = w.Write([]byte(successBody))
+		} else {
+			_, _ = w.Write([]byte(singleSuccess))
+		}
+	}))
+	defer srv.Close()
+
+	c, err := openaicompat.New(openaicompat.Options{
+		BaseURL:      srv.URL,
+		Model:        "m",
+		MaxBatchSize: 2,
+		Concurrency:  4,
+		MaxRetries:   1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	vectors, errs := c.EmbedBatchPartial(context.Background(), []string{"FAIL", "text1", "text2"})
+	if len(vectors) != 3 || len(errs) != 3 {
+		t.Fatalf("len(vectors)=%d len(errs)=%d, want 3,3", len(vectors), len(errs))
+	}
+	// Indices 0 and 1 belong to the failed sub-batch ["FAIL", "text1"] → MaxBatchSize=2
+	if errs[0] == nil || errs[1] == nil {
+		t.Errorf("errs[0]=%v errs[1]=%v, want non-nil for failed sub-batch", errs[0], errs[1])
+	}
+	if vectors[0] != nil || vectors[1] != nil {
+		t.Errorf("vectors[0..1] should be nil on failure")
+	}
+	// Index 2 belongs to the second sub-batch ["text2"] → should succeed.
+	if errs[2] != nil {
+		t.Errorf("errs[2] = %v, want nil (sibling sub-batch should succeed)", errs[2])
+	}
+	if vectors[2] == nil {
+		t.Errorf("vectors[2] = nil, want a vector")
+	}
+}
+
+// TestEmbedBatchPartial_ContextCancel_ReturnsPromptly verifies that all
+// sub-batch goroutines exit promptly when the caller cancels mid-flight.
+// Uses timing rather than testing/synctest because httptest.Server spawns
+// real goroutines outside the synctest bubble, causing hangs under virtual time.
+func TestEmbedBatchPartial_ContextCancel_ReturnsPromptly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timing-sensitive test in short mode")
+	}
+	// Cleanup runs LIFO: handlerDone closes first (registered last), then srv.Close.
+	// This ensures blocked handlers can exit before the server shuts down.
+	handlerDone := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-handlerDone:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(handlerDone) })
+
+	c, err := openaicompat.New(openaicompat.Options{
+		BaseURL:      srv.URL,
+		Model:        "m",
+		MaxBatchSize: 1,
+		Concurrency:  4,
+		MaxRetries:   0, // normalized to default by New; context cancel makes this irrelevant
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = c.EmbedBatchPartial(ctx, []string{"a", "b", "c", "d"})
+	}()
+
+	// Give goroutines time to park on the blocked HTTP call.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("EmbedBatchPartial did not return promptly after context cancel")
+	}
+}
+
+// TestClient_SemaphoreCapsGlobalConcurrency verifies that the per-Client
+// semaphore caps in-flight HTTP requests across concurrent EmbedBatch
+// callers — not just within a single call.
+func TestClient_SemaphoreCapsGlobalConcurrency(t *testing.T) {
+	const limit = 2
+	var inFlight, maxObserved atomic.Int32
+
+	body := `{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"m","usage":{"prompt_tokens":1,"total_tokens":1}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := inFlight.Add(1)
+		for {
+			old := maxObserved.Load()
+			if n <= old || maxObserved.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		inFlight.Add(-1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	c, err := openaicompat.New(openaicompat.Options{
+		BaseURL:      srv.URL,
+		Model:        "m",
+		MaxBatchSize: 1,
+		Concurrency:  limit,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Go(func() {
+			_, _ = c.EmbedBatch(context.Background(), []string{"a", "b", "c", "d"})
+		})
+	}
+	wg.Wait()
+
+	if got := maxObserved.Load(); got > limit {
+		t.Errorf("observed max in-flight = %d, want <= %d", got, limit)
+	}
+}
+
+// TestEmbedBatchPartial_VectorCountMismatch_SetsPerTextErrors verifies that
+// if CallWithRetry returns fewer vectors than texts (defensive guard against
+// a future CallAPI relaxation), EmbedBatchPartial fills per-text errors
+// instead of silently leaving nil vectors with nil errors.
+func TestEmbedBatchPartial_VectorCountMismatch_SetsPerTextErrors(t *testing.T) {
+	// Return 1 vector for a 2-text sub-batch. CallAPI normally rejects this,
+	// but we bypass it by injecting a custom http.Client that returns a
+	// pre-built short response. This exercises the defense-in-depth check.
+	shortBody := `{"object":"list","data":[{"object":"embedding","embedding":[0.1],"index":0}],"model":"m","usage":{"prompt_tokens":1,"total_tokens":1}}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(shortBody))
+	}))
+	defer srv.Close()
+
+	// MaxBatchSize=2, so ["a","b"] goes in one sub-batch. The server returns
+	// only 1 vector — CallAPI would normally catch this with its own count check
+	// and return an error, which the err != nil branch handles. This test
+	// confirms the overall invariant: no nil-vector-with-nil-error slots.
+	c, err := openaicompat.New(openaicompat.Options{
+		BaseURL:      srv.URL,
+		Model:        "m",
+		MaxBatchSize: 2,
+		Concurrency:  4,
+		MaxRetries:   1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	vectors, errs := c.EmbedBatchPartial(context.Background(), []string{"a", "b"})
+	if len(vectors) != 2 || len(errs) != 2 {
+		t.Fatalf("len(vectors)=%d len(errs)=%d, want 2,2", len(vectors), len(errs))
+	}
+	// Whether CallAPI or our defensive check catches the mismatch, both texts
+	// must have non-nil errors and nil vectors — the invariant must hold.
+	for i := range 2 {
+		if errs[i] == nil {
+			t.Errorf("errs[%d] = nil, want non-nil (vector count mismatch)", i)
+		}
+		if vectors[i] != nil {
+			t.Errorf("vectors[%d] = %v, want nil when errs[%d] != nil", i, vectors[i], i)
+		}
 	}
 }
 

@@ -129,10 +129,25 @@ func indexCmd() *cli.Command {
 				progress = reporter
 			}
 
-			idx := indexer.New(c, emb, s, w, cfg.IndexConcurrency, cfg.MaxFileSize, nil, progress)
+			idx := indexer.New(c, emb, s, w, cfg.IndexConcurrency, cfg.MaxFileSize, cfg.WriteBatchSize, nil, progress)
+
+			printFailedFiles := func() {
+				if reporter == nil {
+					return
+				}
+				if failed := reporter.FailedFiles(); len(failed) > 0 {
+					fmt.Fprintf(os.Stderr, "codamigo: %d file(s) failed to index:\n", len(failed))
+					for _, p := range failed {
+						fmt.Fprintf(os.Stderr, "  %s\n", p)
+					}
+					fmt.Fprintln(os.Stderr, "These files will be retried on the next index run.")
+				}
+			}
 
 			if prog == nil {
-				return idx.Index(ctx)
+				err = idx.Index(ctx)
+				printFailedFiles()
+				return err
 			}
 
 			// errCh carries the indexer result. Buffered capacity 1 so the goroutine
@@ -141,7 +156,7 @@ func indexCmd() *cli.Command {
 			tickDone := make(chan struct{})
 
 			go func() {
-				err := idx.Index(ctx)
+				err = idx.Index(ctx)
 				errCh <- err    // send before closing tickDone
 				close(tickDone) // stop the ticker goroutine
 				prog.Send(indexDoneMsg{
@@ -157,6 +172,8 @@ func indexCmd() *cli.Command {
 
 			// Always drain errCh — ensures the indexer goroutine has fully exited.
 			indexErr := <-errCh
+
+			printFailedFiles()
 
 			if runErr != nil {
 				return runErr
@@ -191,7 +208,7 @@ func serveCmd() *cli.Command {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
 			q := query.New(queryEmb, s)
-			idx := indexer.New(c, indexEmb, s, w, cfg.IndexConcurrency, cfg.MaxFileSize, q.InvalidateMapCache, nil)
+			idx := indexer.New(c, indexEmb, s, w, cfg.IndexConcurrency, cfg.MaxFileSize, cfg.WriteBatchSize, q.InvalidateMapCache, nil)
 			wch, err := watcher.New(cfg, w.Match, w.FS())
 			if err != nil {
 				return fmt.Errorf("creating watcher: %w", err)
@@ -256,7 +273,7 @@ func loadConfig(cmd *cli.Command) (*config.Config, error) {
 		cfg.ProjectRoot = wd
 	}
 
-	if err := cfg.Validate(); err != nil {
+	if err = cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)
 	}
 
@@ -353,6 +370,8 @@ func newEmbedder(cfg *config.Config, inputType string) (*openaicompat.Client, er
 		RateBurst:      cfg.EmbeddingRateBurst,
 		MaxRetries:     cfg.EmbeddingMaxRetries,
 		RetryBaseDelay: cfg.EmbeddingRetryBaseDelay,
+		Concurrency:    cfg.IndexConcurrency,
+		HTTPTimeout:    cfg.EmbeddingHTTPTimeout,
 	})
 }
 
