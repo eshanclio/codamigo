@@ -1,8 +1,8 @@
-.PHONY: build test fmt vet lint fuzz tidy clean \
-        test-chunker test-langs test-config test-embedder \
+.PHONY: build test fmt vet lint tidy clean \
+        test-config test-embedder \
         test-store test-walker test-indexer test-query test-mcp
 
-# CGO_ENABLED=1 is required: langs/markdown.go compiles C sources via cgo.
+# CGO_ENABLED=1 is required: go-code-chunker dependency compiles C sources via cgo.
 export CGO_ENABLED := 1
 
 # Build tags: sqlite_fts5 enables FTS5 full-text search in go-sqlite3.
@@ -13,12 +13,6 @@ build:
 
 test:
 	go test $(TAGS) ./...
-
-test-chunker:
-	go test $(TAGS) ./chunker/...
-
-test-langs:
-	go test $(TAGS) ./langs/...
 
 test-config:
 	go test $(TAGS) ./config/...
@@ -41,12 +35,9 @@ test-query:
 test-mcp:
 	go test $(TAGS) ./mcp/...
 
-# Run a single test by name: make run-test TEST=TestChunkFile_Metadata PKG=./chunker/...
+# Run a single test by name: make run-test TEST=TestSearch_Basic PKG=./query/...
 run-test:
 	go test $(TAGS) $(PKG) -run $(TEST) -v
-
-fuzz:
-	go test $(TAGS) ./chunker/... -fuzz=FuzzChunkFile -fuzztime=30s
 
 fmt:
 	go fmt -w .

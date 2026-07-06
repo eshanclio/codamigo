@@ -13,8 +13,8 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/ieshan/codamigo/config"
-	"github.com/ieshan/codamigo/langs"
 	"github.com/ieshan/codamigo/walker"
+	"github.com/ieshan/go-code-chunker/langs"
 )
 
 func doctorCmd() *cli.Command {

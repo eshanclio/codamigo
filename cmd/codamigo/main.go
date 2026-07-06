@@ -11,16 +11,16 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/ieshan/codamigo/chunker"
 	"github.com/ieshan/codamigo/config"
 	"github.com/ieshan/codamigo/embedder/openaicompat"
 	"github.com/ieshan/codamigo/indexer"
-	"github.com/ieshan/codamigo/langs"
 	"github.com/ieshan/codamigo/mcp"
 	"github.com/ieshan/codamigo/query"
 	"github.com/ieshan/codamigo/store"
 	"github.com/ieshan/codamigo/walker"
 	"github.com/ieshan/codamigo/watcher"
+	"github.com/ieshan/go-code-chunker/chunker"
+	"github.com/ieshan/go-code-chunker/langs"
 )
 
 // commonFlags are included in every subcommand. Each flag reads its value from

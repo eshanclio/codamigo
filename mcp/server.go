@@ -3,9 +3,10 @@
 //
 // [Server] is constructed with a [*query.Querier] and optional
 // [*indexer.Indexer] and [watcher.Watcher]. [Server.Serve] runs the MCP
-// stdio loop until the context is cancelled. The server exposes a single
-// "search" tool with query, limit, and refresh_index parameters. When no
-// Indexer is provided, refresh_index=true is silently ignored.
+// stdio loop until the context is cancelled. The server exposes a "search"
+// tool for semantic code search and a "get_map" tool that returns a
+// structural map of the codebase. When no Indexer is provided,
+// refresh_index=true is silently ignored.
 package mcp
 
 import (
@@ -20,12 +21,10 @@ import (
 	"sync"
 	"time"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
-
 	"github.com/ieshan/codamigo/indexer"
 	"github.com/ieshan/codamigo/query"
 	"github.com/ieshan/codamigo/watcher"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // refreshCooldown is the minimum duration between forced re-indexes triggered
@@ -110,13 +109,22 @@ func (s *Server) ServeIO(ctx context.Context, in io.Reader, out io.Writer) error
 		})
 	}
 
-	// 3. Build and run the MCP stdio server with context propagation.
-	srv := mcpserver.NewMCPServer("codamigo", "0.1.0")
-	srv.AddTool(s.buildSearchTool(), s.HandleSearch)
-	srv.AddTool(s.buildMapTool(), s.HandleMap)
+	// 3. Build and run the MCP server with context propagation.
+	srv := mcp.NewServer(&mcp.Implementation{Name: "codamigo", Version: "0.1.0"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "search",
+		Description: "Semantic search over the indexed codebase",
+	}, s.HandleSearch)
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "get_map",
+		Description: "Returns a structural map of the codebase showing packages, files, and symbol names. Use this to orient before searching. No API calls needed. By default, excludes configured non-code files and shows line ranges, type summaries, and visibility markers.",
+	}, s.HandleMap)
 
-	stdio := mcpserver.NewStdioServer(srv)
-	err := stdio.Listen(ctx, in, out)
+	transport := &mcp.IOTransport{
+		Reader: io.NopCloser(in),
+		Writer: nopCloserWriter{out},
+	}
+	err := srv.Run(ctx, transport)
 
 	// Wait for the watcher goroutine to finish before returning.
 	wg.Wait()
@@ -147,111 +155,71 @@ func (s *Server) watchLoop(ctx context.Context) {
 	}
 }
 
-// buildSearchTool returns the MCP tool definition for the search command.
-func (s *Server) buildSearchTool() mcpgo.Tool {
-	return mcpgo.NewTool("search",
-		mcpgo.WithDescription("Semantic search over the indexed codebase"),
-		mcpgo.WithString("query",
-			mcpgo.Required(),
-			mcpgo.Description("Search text to embed and match against indexed chunks"),
-		),
-		mcpgo.WithInteger("limit",
-			mcpgo.Description("Maximum number of results to return (default 10)"),
-			mcpgo.DefaultNumber(10),
-		),
-		mcpgo.WithArray("languages",
-			mcpgo.Description("Filter results by programming language (e.g. [\"go\", \"python\"])"),
-		),
-		mcpgo.WithArray("paths",
-			mcpgo.Description("Glob patterns to restrict search scope (e.g. [\"cmd/**\"])"),
-		),
-		mcpgo.WithInteger("max_tokens",
-			mcpgo.Description("Token budget for results. 0 = no limit (default 0)"),
-			mcpgo.DefaultNumber(0),
-		),
-		mcpgo.WithString("package",
-			mcpgo.Description("Filter results to a package (e.g. \"store\", \"embedder/openaicompat\")"),
-		),
-		mcpgo.WithBoolean("refresh_index",
-			mcpgo.Description("Force a full re-index before querying (default false)"),
-			mcpgo.DefaultBool(false),
-		),
-		mcpgo.WithString("name",
-			mcpgo.Description("Filter results to chunks matching this symbol name (e.g. \"Search\", \"NewChunker\")"),
-		),
-		mcpgo.WithArray("node_kinds",
-			mcpgo.Description("Filter by AST node kind (e.g. [\"function_declaration\", \"type_declaration\"])"),
-		),
-		mcpgo.WithBoolean("metadata_only",
-			mcpgo.Description("If true, return only file paths, line numbers, and symbol names without source code content. Use for exploratory queries to save tokens."),
-			mcpgo.DefaultBool(false),
-		),
-		mcpgo.WithInteger("offset",
-			mcpgo.Description("Number of results to skip for pagination (default 0)"),
-			mcpgo.DefaultNumber(0),
-		),
-	)
+// SearchInput defines the parameters for the search MCP tool.
+// The SDK infers the JSON schema from this struct's json and jsonschema tags.
+type SearchInput struct {
+	Query        string   `json:"query" jsonschema:"Search text to embed and match against indexed chunks"`
+	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum number of results to return (default 10)"`
+	Languages    []string `json:"languages,omitempty" jsonschema:"Filter results by programming language (e.g. [\"go\", \"python\"])"`
+	Paths        []string `json:"paths,omitempty" jsonschema:"Glob patterns to restrict search scope (e.g. [\"cmd/**\"])"`
+	MaxTokens    int      `json:"max_tokens,omitempty" jsonschema:"Token budget for results. 0 = no limit (default 0)"`
+	Package      string   `json:"package,omitempty" jsonschema:"Filter results to a package (e.g. \"store\", \"embedder/openaicompat\")"`
+	RefreshIndex bool     `json:"refresh_index,omitempty" jsonschema:"Force a full re-index before querying (default false)"`
+	Name         string   `json:"name,omitempty" jsonschema:"Filter results to chunks matching this symbol name (e.g. \"Search\", \"NewChunker\")"`
+	NodeKinds    []string `json:"node_kinds,omitempty" jsonschema:"Filter by AST node kind (e.g. [\"function_declaration\", \"type_declaration\"])"`
+	MetadataOnly bool     `json:"metadata_only,omitempty" jsonschema:"If true, return only file paths, line numbers, and symbol names without source code content. Use for exploratory queries to save tokens."`
+	Offset       int      `json:"offset,omitempty" jsonschema:"Number of results to skip for pagination (default 0)"`
 }
 
-// HandleSearch is the ToolHandlerFunc for the search tool.
+// HandleSearch is the tool handler for the search MCP tool.
 // Exported to allow direct testing without the MCP stdio transport.
-func (s *Server) HandleSearch(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) HandleSearch(ctx context.Context, req *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, any, error) {
 	if s.querier == nil {
-		return mcpgo.NewToolResultError("no querier configured"), nil
+		return newErrorResult("no querier configured"), nil, nil
 	}
 
-	queryText := mcpgo.ParseString(req, "query", "")
+	queryText := input.Query
 	if queryText == "" {
-		return mcpgo.NewToolResultError("query parameter is required"), nil
+		return newErrorResult("query parameter is required"), nil, nil
 	}
 
-	limit := mcpgo.ParseInt(req, "limit", 10)
-	maxTokens := mcpgo.ParseInt(req, "max_tokens", 0)
-	pkg := mcpgo.ParseString(req, "package", "")
+	limit := input.Limit
+	maxTokens := max(0, input.MaxTokens)
+	pkg := input.Package
 	if pkg != "" {
 		cleaned := filepath.Clean(pkg)
 		if cleaned == "." || strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
-			return mcpgo.NewToolResultError("package must not contain '..' segments"), nil
+			return newErrorResult("package must not contain '..' segments"), nil, nil
 		}
 		pkg = cleaned
 	}
-	refreshIndex := mcpgo.ParseBoolean(req, "refresh_index", false)
+	refreshIndex := input.RefreshIndex
 
-	// Parse optional array parameters.
-	languages := parseStringArray(req, "languages")
-	paths := parseStringArray(req, "paths")
+	// Cap array parameters at maxArraySize to prevent oversized queries.
+	languages := capStringSlice(input.Languages)
+	paths := capStringSlice(input.Paths)
 	for _, p := range paths {
 		cleaned := filepath.Clean(p)
 		if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
-			return mcpgo.NewToolResultError("paths must not contain '..' segments"), nil
+			return newErrorResult("paths must not contain '..' segments"), nil, nil
 		}
 		if strings.Contains(p, "**") && !strings.HasSuffix(p, "/**") {
-			return mcpgo.NewToolResultError(
-				fmt.Sprintf("unsupported glob %q: ** is only supported as trailing /**", p)), nil
+			return newErrorResult(
+				fmt.Sprintf("unsupported glob %q: ** is only supported as trailing /**", p)), nil, nil
 		}
 	}
-	name := mcpgo.ParseString(req, "name", "")
-	nodeKinds := parseStringArray(req, "node_kinds")
-	metadataOnly := mcpgo.ParseBoolean(req, "metadata_only", false)
-	offset := mcpgo.ParseInt(req, "offset", 0)
+	name := input.Name
+	nodeKinds := capStringSlice(input.NodeKinds)
+	metadataOnly := input.MetadataOnly
+	offset := max(0, input.Offset)
 
-	// Clamp parameters to safe ranges.
-	// limit: values <= 0 default to 10; values > 100 clamped to 100
+	// Clamp limit to safe range.
+	// Values <= 0 default to 10; values > 100 clamped to 100
 	// (100 chunks × ~500 tokens each ≈ 50 K tokens, near most AI context limits).
 	if limit <= 0 {
 		limit = 10
 	}
-	if limit > 100 {
-		limit = 100
-	}
-	// max_tokens: negative values treated as 0 (unlimited).
-	if maxTokens < 0 {
-		maxTokens = 0
-	}
-	// offset: negative values treated as 0.
-	if offset < 0 {
-		offset = 0
-	}
+	limit = min(limit, 100)
 
 	// Optional forced re-index, subject to a 30 s cooldown so that rapid
 	// back-to-back calls cannot hammer the indexer.
@@ -262,7 +230,7 @@ func (s *Server) HandleSearch(ctx context.Context, req mcpgo.CallToolRequest) (*
 			if err != nil {
 				s.indexMu.Unlock()
 				slog.ErrorContext(ctx, "re-index failed", slog.Any("error", err))
-				return mcpgo.NewToolResultError("re-index failed; check server logs"), nil
+				return newErrorResult("re-index failed; check server logs"), nil, nil
 			}
 			s.lastRefresh = time.Now()
 		}
@@ -286,7 +254,7 @@ func (s *Server) HandleSearch(ctx context.Context, req mcpgo.CallToolRequest) (*
 	sr, err := s.querier.SearchWithOptions(ctx, queryText, opts)
 	if err != nil {
 		slog.ErrorContext(ctx, "search failed", slog.Any("error", err))
-		return mcpgo.NewToolResultError("search failed; check server logs"), nil
+		return newErrorResult("search failed; check server logs"), nil, nil
 	}
 
 	if metadataOnly {
@@ -297,7 +265,7 @@ func (s *Server) HandleSearch(ctx context.Context, req mcpgo.CallToolRequest) (*
 		if sr.Truncated {
 			b.WriteString("(truncated to token budget)\n")
 		}
-		return mcpgo.NewToolResultText(b.String()), nil
+		return newTextResult(b.String()), nil, nil
 	}
 
 	type searchResponse struct {
@@ -308,61 +276,60 @@ func (s *Server) HandleSearch(ctx context.Context, req mcpgo.CallToolRequest) (*
 	data, err := json.Marshal(resp)
 	if err != nil {
 		slog.ErrorContext(ctx, "serializing results", slog.Any("error", err))
-		return mcpgo.NewToolResultError("internal error; check server logs"), nil
+		return newErrorResult("internal error; check server logs"), nil, nil
 	}
 
-	return mcpgo.NewToolResultText(string(data)), nil
+	return newTextResult(string(data)), nil, nil
 }
 
-// buildMapTool returns the MCP tool definition for the get_map command.
-func (s *Server) buildMapTool() mcpgo.Tool {
-	return mcpgo.NewTool("get_map",
-		mcpgo.WithDescription("Returns a structural map of the codebase showing packages, files, and symbol names. Use this to orient before searching. No API calls needed. By default, excludes configured non-code files and shows line ranges, type summaries, and visibility markers."),
-		mcpgo.WithInteger("max_tokens",
-			mcpgo.Description("Maximum token budget for the response (default 2000)"),
-			mcpgo.DefaultNumber(2000),
-		),
-		mcpgo.WithBoolean("code_only",
-			mcpgo.Description("Exclude configured non-code languages from the map (default true)"),
-			mcpgo.DefaultBool(true),
-		),
-		mcpgo.WithBoolean("show_summary",
-			mcpgo.Description("Show per-file type summary in file headers (default true)"),
-			mcpgo.DefaultBool(true),
-		),
-		mcpgo.WithBoolean("show_visibility",
-			mcpgo.Description("Show export markers: + for public, - for internal (default true)"),
-			mcpgo.DefaultBool(true),
-		),
-	)
+// MapInput defines the parameters for the get_map MCP tool.
+// Pointer fields are used where defaults differ from Go zero values.
+type MapInput struct {
+	MaxTokens      *int  `json:"max_tokens,omitempty" jsonschema:"Maximum token budget for the response (default 2000)"`
+	CodeOnly       *bool `json:"code_only,omitempty" jsonschema:"Exclude configured non-code languages from the map (default true)"`
+	ShowSummary    *bool `json:"show_summary,omitempty" jsonschema:"Show per-file type summary in file headers (default true)"`
+	ShowVisibility *bool `json:"show_visibility,omitempty" jsonschema:"Show export markers: + for public, - for internal (default true)"`
 }
 
-// HandleMap is the ToolHandlerFunc for the get_map tool.
+// HandleMap is the tool handler for the get_map MCP tool.
 // Exported to allow direct testing without the MCP stdio transport.
-func (s *Server) HandleMap(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+func (s *Server) HandleMap(ctx context.Context, req *mcp.CallToolRequest, input MapInput) (*mcp.CallToolResult, any, error) {
 	if s.querier == nil {
-		return mcpgo.NewToolResultError("no querier configured"), nil
+		return newErrorResult("no querier configured"), nil, nil
 	}
-	maxTokens := mcpgo.ParseInt(req, "max_tokens", 2000)
-	if maxTokens < 0 {
-		maxTokens = 0
+	maxTokens := 2000
+	if input.MaxTokens != nil {
+		maxTokens = *input.MaxTokens
+	}
+	maxTokens = max(0, maxTokens)
+	codeOnly := true
+	if input.CodeOnly != nil {
+		codeOnly = *input.CodeOnly
+	}
+	showSummary := true
+	if input.ShowSummary != nil {
+		showSummary = *input.ShowSummary
+	}
+	showVisibility := true
+	if input.ShowVisibility != nil {
+		showVisibility = *input.ShowVisibility
 	}
 	opts := query.MapOptions{
 		MaxTokens:        maxTokens,
-		CodeOnly:         mcpgo.ParseBoolean(req, "code_only", true),
+		CodeOnly:         codeOnly,
 		NonCodeLanguages: s.nonCodeLanguages,
-		ShowSummary:      mcpgo.ParseBoolean(req, "show_summary", true),
-		ShowVisibility:   mcpgo.ParseBoolean(req, "show_visibility", true),
+		ShowSummary:      showSummary,
+		ShowVisibility:   showVisibility,
 	}
 	result, err := s.querier.Map(ctx, opts)
 	if err != nil {
 		slog.ErrorContext(ctx, "map generation failed", slog.Any("error", err))
-		return mcpgo.NewToolResultError("map generation failed; check server logs"), nil
+		return newErrorResult("map generation failed; check server logs"), nil, nil
 	}
 	if result == "" {
-		return mcpgo.NewToolResultText("No symbols indexed yet. Run indexing first."), nil
+		return newTextResult("No symbols indexed yet. Run indexing first."), nil, nil
 	}
-	return mcpgo.NewToolResultText(result), nil
+	return newTextResult(result), nil, nil
 }
 
 // maxArraySize is the maximum number of elements accepted from any array
@@ -370,29 +337,33 @@ func (s *Server) HandleMap(ctx context.Context, req mcpgo.CallToolRequest) (*mcp
 // oversized queries from reaching the store layer.
 const maxArraySize = 50
 
-// parseStringArray extracts a []string from a tool request argument.
-// Returns nil when the key is absent or the value is not a string slice.
-// The returned slice is capped at maxArraySize elements.
-func parseStringArray(req mcpgo.CallToolRequest, key string) []string {
-	raw := mcpgo.ParseArgument(req, key, nil)
-	if raw == nil {
-		return nil
+// capStringSlice truncates s to at most maxArraySize elements.
+func capStringSlice(s []string) []string {
+	if len(s) > maxArraySize {
+		return s[:maxArraySize]
 	}
-	slice, ok := raw.([]any)
-	if !ok {
-		return nil
-	}
-	if len(slice) > maxArraySize {
-		slice = slice[:maxArraySize]
-	}
-	out := make([]string, 0, len(slice))
-	for _, v := range slice {
-		if s, ok := v.(string); ok {
-			out = append(out, s)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return s
 }
+
+// newTextResult creates a CallToolResult containing a single text content block.
+func newTextResult(text string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+	}
+}
+
+// newErrorResult creates a CallToolResult with IsError set to true and an error
+// message in the content.
+func newErrorResult(msg string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
+	}
+}
+
+// nopCloserWriter wraps an io.Writer to satisfy io.WriteCloser with a no-op Close.
+type nopCloserWriter struct {
+	io.Writer
+}
+
+func (nopCloserWriter) Close() error { return nil }

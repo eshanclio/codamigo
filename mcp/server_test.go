@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ieshan/codamigo/mcp"
 	"github.com/ieshan/codamigo/query"
@@ -82,23 +82,14 @@ func setupTestServer(t *testing.T) *mcp.Server {
 	return mcp.NewServer(q, nil, nil, []string{"markdown", "yaml", "json"})
 }
 
-func makeSearchRequest(args map[string]any) mcpgo.CallToolRequest {
-	return mcpgo.CallToolRequest{
-		Params: mcpgo.CallToolParams{
-			Name:      "search",
-			Arguments: args,
-		},
-	}
-}
-
 func TestHandleSearch_BasicQuery(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query": "main function",
-		"limit": float64(10),
-	}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query: "main function",
+		Limit: 10,
+	})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -106,7 +97,7 @@ func TestHandleSearch_BasicQuery(t *testing.T) {
 		t.Fatalf("unexpected error result: %v", result.Content)
 	}
 
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	var resp struct {
 		Results   []query.Result `json:"results"`
 		Truncated bool           `json:"truncated"`
@@ -126,7 +117,7 @@ func TestHandleSearch_MissingQuery(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -139,9 +130,9 @@ func TestHandleSearch_NoQuerier(t *testing.T) {
 	srv := mcp.NewServer(nil, nil, nil, nil)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query": "test",
-	}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query: "test",
+	})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -150,20 +141,11 @@ func TestHandleSearch_NoQuerier(t *testing.T) {
 	}
 }
 
-func makeMapRequest(args map[string]any) mcpgo.CallToolRequest {
-	return mcpgo.CallToolRequest{
-		Params: mcpgo.CallToolParams{
-			Name:      "get_map",
-			Arguments: args,
-		},
-	}
-}
-
 func TestHandleMap_BasicOutput(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	result, _, err := srv.HandleMap(ctx, &mcpsdk.CallToolRequest{}, mcp.MapInput{})
 	if err != nil {
 		t.Fatalf("handleMap: %v", err)
 	}
@@ -171,7 +153,7 @@ func TestHandleMap_BasicOutput(t *testing.T) {
 		t.Fatalf("unexpected error: %v", result.Content)
 	}
 
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	if text == "" {
 		t.Fatal("expected non-empty map output")
 	}
@@ -184,14 +166,14 @@ func TestHandleMap_DefaultMaxTokens(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	result, _, err := srv.HandleMap(ctx, &mcpsdk.CallToolRequest{}, mcp.MapInput{})
 	if err != nil {
 		t.Fatalf("handleMap: %v", err)
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error: %v", result.Content)
 	}
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	if strings.Contains(text, "truncated") {
 		t.Error("small test data should not be truncated at default budget")
 	}
@@ -201,7 +183,7 @@ func TestHandleMap_NoQuerier(t *testing.T) {
 	srv := mcp.NewServer(nil, nil, nil, nil)
 	ctx := t.Context()
 
-	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	result, _, err := srv.HandleMap(ctx, &mcpsdk.CallToolRequest{}, mcp.MapInput{})
 	if err != nil {
 		t.Fatalf("handleMap: %v", err)
 	}
@@ -214,11 +196,11 @@ func TestHandleSearch_MaxTokens(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":      "function",
-		"limit":      float64(10),
-		"max_tokens": float64(1),
-	}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:     "function",
+		Limit:     10,
+		MaxTokens: 1,
+	})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -226,7 +208,7 @@ func TestHandleSearch_MaxTokens(t *testing.T) {
 		t.Fatalf("unexpected error: %v", result.Content)
 	}
 
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	var resp struct {
 		Results   []query.Result `json:"results"`
 		Truncated bool           `json:"truncated"`
@@ -286,28 +268,28 @@ func TestHandleSearch_LimitClamping(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		limit   any
+		limit   int
 		wantMax int
 	}{
-		{"negative", float64(-5), 10},    // clamped to default 10
-		{"zero", float64(0), 10},         // clamped to default 10
-		{"valid", float64(20), 20},       // respected as-is
-		{"above_max", float64(500), 100}, // clamped to hard max 100
+		{"negative", -5, 10},    // clamped to default 10
+		{"zero", 0, 10},         // clamped to default 10
+		{"valid", 20, 20},       // respected as-is
+		{"above_max", 500, 100}, // clamped to hard max 100
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-				"query": "function",
-				"limit": tc.limit,
-			}))
+			result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+				Query: "function",
+				Limit: tc.limit,
+			})
 			if err != nil {
 				t.Fatalf("HandleSearch: %v", err)
 			}
 			if result.IsError {
 				t.Fatalf("unexpected error result: %v", result.Content)
 			}
-			text := result.Content[0].(mcpgo.TextContent).Text
+			text := result.Content[0].(*mcpsdk.TextContent).Text
 			var resp struct {
 				Results []query.Result `json:"results"`
 			}
@@ -315,7 +297,7 @@ func TestHandleSearch_LimitClamping(t *testing.T) {
 				t.Fatalf("unmarshal: %v", err)
 			}
 			if len(resp.Results) > tc.wantMax {
-				t.Errorf("limit=%v: got %d results, want <= %d (clamping failed)",
+				t.Errorf("limit=%d: got %d results, want <= %d (clamping failed)",
 					tc.limit, len(resp.Results), tc.wantMax)
 			}
 		})
@@ -326,12 +308,12 @@ func TestHandleSearch_NegativeOffsetAndMaxTokens(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":      "function",
-		"limit":      float64(10),
-		"offset":     float64(-3),
-		"max_tokens": float64(-100),
-	}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:     "function",
+		Limit:     10,
+		Offset:    -3,
+		MaxTokens: -100,
+	})
 	if err != nil {
 		t.Fatalf("HandleSearch: %v", err)
 	}
@@ -363,10 +345,10 @@ func TestHandleSearch_RefreshCooldown(t *testing.T) {
 	ctx := t.Context()
 
 	// First call — cooldown not yet set; indexer should be called.
-	_, err = srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":         "function",
-		"refresh_index": true,
-	}))
+	_, _, err = srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:        "function",
+		RefreshIndex: true,
+	})
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -375,10 +357,10 @@ func TestHandleSearch_RefreshCooldown(t *testing.T) {
 	}
 
 	// Immediately call again — still within cooldown; indexer must NOT be called.
-	_, err = srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":         "function",
-		"refresh_index": true,
-	}))
+	_, _, err = srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:        "function",
+		RefreshIndex: true,
+	})
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}
@@ -402,11 +384,11 @@ func TestHandleSearch_PackageFilter(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":   "function",
-		"limit":   float64(10),
-		"package": "src/utils",
-	}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:   "function",
+		Limit:   10,
+		Package: "src/utils",
+	})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -414,7 +396,7 @@ func TestHandleSearch_PackageFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", result.Content)
 	}
 
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	var resp struct {
 		Results   []query.Result `json:"results"`
 		Truncated bool           `json:"truncated"`
@@ -442,11 +424,11 @@ func TestHandleSearch_MetadataOnly(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":         "function",
-		"limit":         float64(10),
-		"metadata_only": true,
-	}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:        "function",
+		Limit:        10,
+		MetadataOnly: true,
+	})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -454,7 +436,7 @@ func TestHandleSearch_MetadataOnly(t *testing.T) {
 		t.Fatalf("unexpected error result: %v", result.Content)
 	}
 
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	if text == "" {
 		t.Fatal("expected non-empty metadata_only response")
 	}
@@ -487,10 +469,10 @@ func TestHandleSearch_PackagePathTraversal(t *testing.T) {
 	srv := setupTestServer(t)
 	ctx := t.Context()
 
-	result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":   "test",
-		"package": "../../../etc",
-	}))
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:   "test",
+		Package: "../../../etc",
+	})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -498,16 +480,16 @@ func TestHandleSearch_PackagePathTraversal(t *testing.T) {
 		t.Fatal("expected error for path traversal in package parameter, got success")
 	}
 	// Error message should mention ".." so callers understand the rejection.
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	if !strings.Contains(text, "..") {
 		t.Errorf("error message should mention '..', got: %s", text)
 	}
 
 	// Test the filepath.Clean bypass pattern: no ".." substring but resolves outside root.
-	result2, err2 := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":   "test",
-		"package": "store/./../../etc",
-	}))
+	result2, _, err2 := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:   "test",
+		Package: "store/./../../etc",
+	})
 	if err2 != nil {
 		t.Fatalf("handleSearch: %v", err2)
 	}
@@ -516,10 +498,10 @@ func TestHandleSearch_PackagePathTraversal(t *testing.T) {
 	}
 
 	// "store/.." cleans to "." which would match everything via "./**" glob.
-	result3, err3 := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":   "test",
-		"package": "store/..",
-	}))
+	result3, _, err3 := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:   "test",
+		Package: "store/..",
+	})
 	if err3 != nil {
 		t.Fatalf("handleSearch: %v", err3)
 	}
@@ -528,10 +510,10 @@ func TestHandleSearch_PackagePathTraversal(t *testing.T) {
 	}
 
 	// Bare "." should also be rejected.
-	result4, err4 := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-		"query":   "test",
-		"package": ".",
-	}))
+	result4, _, err4 := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+		Query:   "test",
+		Package: ".",
+	})
 	if err4 != nil {
 		t.Fatalf("handleSearch: %v", err4)
 	}
@@ -558,11 +540,11 @@ func TestHandleSearch_UnsupportedDoubleStarGlob(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := srv.HandleSearch(ctx, makeSearchRequest(map[string]any{
-				"query": "function",
-				"limit": float64(10),
-				"paths": []any{tc.path},
-			}))
+			result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
+				Query: "function",
+				Limit: 10,
+				Paths: []string{tc.path},
+			})
 			if err != nil {
 				t.Fatalf("HandleSearch: %v", err)
 			}
@@ -615,11 +597,11 @@ func TestHandleMap_CodeOnlyParam(t *testing.T) {
 	ctx := t.Context()
 
 	// Default (code_only=true): markdown excluded.
-	result, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{}))
+	result, _, err := srv.HandleMap(ctx, &mcpsdk.CallToolRequest{}, mcp.MapInput{})
 	if err != nil {
 		t.Fatalf("HandleMap: %v", err)
 	}
-	text := result.Content[0].(mcpgo.TextContent).Text
+	text := result.Content[0].(*mcpsdk.TextContent).Text
 	if strings.Contains(text, "CHANGELOG") {
 		t.Error("default code_only=true should exclude markdown files")
 	}
@@ -628,13 +610,13 @@ func TestHandleMap_CodeOnlyParam(t *testing.T) {
 	}
 
 	// Explicit code_only=false: markdown included.
-	result2, err := srv.HandleMap(ctx, makeMapRequest(map[string]any{
-		"code_only": false,
-	}))
+	result2, _, err := srv.HandleMap(ctx, &mcpsdk.CallToolRequest{}, mcp.MapInput{
+		CodeOnly: new(false),
+	})
 	if err != nil {
 		t.Fatalf("HandleMap: %v", err)
 	}
-	text2 := result2.Content[0].(mcpgo.TextContent).Text
+	text2 := result2.Content[0].(*mcpsdk.TextContent).Text
 	if !strings.Contains(text2, "CHANGELOG") {
 		t.Error("code_only=false should include markdown files")
 	}

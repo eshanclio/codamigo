@@ -19,10 +19,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ieshan/codamigo/chunker"
 	"github.com/ieshan/codamigo/embedder"
 	"github.com/ieshan/codamigo/store"
 	"github.com/ieshan/codamigo/walker"
+	"github.com/ieshan/go-code-chunker/chunker"
 )
 
 // Progress receives per-file notifications during indexing.

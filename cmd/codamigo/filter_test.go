@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ieshan/codamigo/langs"
+	"github.com/ieshan/go-code-chunker/langs"
 )
 
 func TestBuildExtensionFilter(t *testing.T) {

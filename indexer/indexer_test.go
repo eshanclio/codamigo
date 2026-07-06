@@ -14,12 +14,12 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/ieshan/codamigo/chunker"
 	"github.com/ieshan/codamigo/config"
 	"github.com/ieshan/codamigo/indexer"
-	"github.com/ieshan/codamigo/langs"
 	"github.com/ieshan/codamigo/store"
 	"github.com/ieshan/codamigo/walker"
+	"github.com/ieshan/go-code-chunker/chunker"
+	"github.com/ieshan/go-code-chunker/langs"
 )
 
 type fakeEmbedder struct {

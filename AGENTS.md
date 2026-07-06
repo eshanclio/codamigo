@@ -9,15 +9,14 @@ CGo is required (tree-sitter grammars include C sources). Ensure `cc` is on `PAT
 ```sh
 make build          # build all packages
 make test           # run all tests
-make test-chunker   # single-package (also: test-langs, test-store, test-walker,
-                    #   test-indexer, test-query, test-mcp, test-config, test-embedder)
+make test-config    # single-package (also: test-store, test-walker,
+                    #   test-indexer, test-query, test-mcp, test-embedder)
 make fmt            # format (go fmt)
 make vet            # static analysis
 make lint           # golangci-lint
-make fuzz           # fuzz chunker for 30s
 ```
 
-Single named test: `make run-test PKG=./chunker/... TEST=TestChunkFile_Metadata`
+Single named test: `make run-test PKG=./indexer/... TEST=TestIndex_Basic`
 
 All `make` targets pass `-tags sqlite_fts5`. Running `go test` directly requires adding that tag.
 
@@ -28,11 +27,11 @@ Specialized one-off commands (no `make` target): `go build -gcflags='-m'` (escap
 Dependency order is strict and one-directional — no cycles.
 
 ```
-config    embedder            store    chunker
-             ↑                           ↑
-          embedder/                    langs
+config    embedder            store
+             ↑
+          embedder/
           openaicompat
-                  walker ────────────────┤
+                  walker ────────────────┐
                   watcher ───────────────┤
                   indexer ◄──────────────┤
                   query ◄── store        │
@@ -41,25 +40,29 @@ config    embedder            store    chunker
                           store,         │
                           watcher        │
                   cmd/codamigo ──────────┘
+                        │
+                        ▼
+              github.com/ieshan/go-code-chunker
+                ├── chunker/  (cAST algorithm)
+                └── langs/    (language configs, CGo)
 ```
 
-- `chunker/` — cAST algorithm; no CGo, no language knowledge
-- `langs/` — per-language configs; **only CGo in the repo**; only imported by `cmd/`
+- `github.com/ieshan/go-code-chunker` — external module providing `chunker/` (cAST algorithm) and `langs/` (per-language configs with CGo grammars); imported only by `cmd/codamigo`
 - `config/` — `Config` struct; no internal imports
 - `embedder/` — interface only; impl in `embedder/openaicompat/`
-- `store/` — `Store` interface + sqlite-vec; never imports `chunker`
+- `store/` — `Store` interface + sqlite-vec; never imports `go-code-chunker/chunker`
 - `walker/` — recursive FS walk + gitignore + include/exclude filtering
 - `watcher/` — fsnotify + poll watcher implementations
 - `indexer/` — walk → chunk → embed → store pipeline
 - `query/` — embed query, hybrid KNN + BM25 search, repo map
 - `mcp/` — MCP stdio server; `search` and `get_map` tools
-- `cmd/codamigo/` — CLI entry point; only place that imports `langs`
+- `cmd/codamigo/` — CLI entry point; only place that imports `go-code-chunker/langs`
 
 ## Architectural rules
 
 - **No circular imports.** Add a shared interface instead.
-- **`langs/` only imported by `cmd/`.** Inject `*chunker.Chunker` everywhere else.
-- **`store` never imports `chunker`.** Map `chunker.Chunk` → `store.Record` in `indexer`.
+- **`go-code-chunker/langs` only imported by `cmd/`.** Inject `*chunker.Chunker` everywhere else.
+- **`store` never imports `go-code-chunker/chunker`.** Map `chunker.Chunk` → `store.Record` in `indexer`.
 - **Config passed at construction time.** No package reads global config state.
 - **No packages named `util`, `common`, `helpers`, or `shared`.** Use a domain name.
 - **Indexer must not buffer paths.** Feed directly from `walker.Walk(ctx)` into the errgroup — never collect into `[]string` first.
