@@ -11,8 +11,8 @@ import (
 )
 
 // pollWatcher implements [Watcher] by periodically scanning the filesystem
-// and comparing mod-times between scans. It is the fallback when fsnotify
-// is unavailable or the OS watch limit has been reached.
+// and comparing mod-times between scans. It is the fallback when kernel-level
+// watching is unavailable or the OS watch limit has been reached.
 type pollWatcher struct {
 	root            string
 	fsys            fs.FS

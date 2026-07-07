@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/ieshan/codamigo/mcp"
 	"github.com/ieshan/codamigo/query"
 	"github.com/ieshan/codamigo/store"
+	"github.com/ieshan/codamigo/watcher"
 )
 
 func TestNewServer_NilDependencies(t *testing.T) {
@@ -371,14 +375,27 @@ func TestHandleSearch_RefreshCooldown(t *testing.T) {
 
 // mockIndexer is a test double for the Indexer interface used by the MCP server.
 type mockIndexer struct {
-	indexFn func(ctx context.Context) error
+	indexFn      func(ctx context.Context) error
+	indexFilesFn func(ctx context.Context, paths []string) error
+	indexCalled  bool
+	filesCalled  bool
 }
 
 func (m *mockIndexer) Index(ctx context.Context) error {
-	return m.indexFn(ctx)
+	m.indexCalled = true
+	if m.indexFn != nil {
+		return m.indexFn(ctx)
+	}
+	return nil
 }
 
-func (m *mockIndexer) IndexFiles(_ context.Context, _ []string) error { return nil }
+func (m *mockIndexer) IndexFiles(ctx context.Context, paths []string) error {
+	m.filesCalled = true
+	if m.indexFilesFn != nil {
+		return m.indexFilesFn(ctx, paths)
+	}
+	return nil
+}
 
 func TestHandleSearch_PackageFilter(t *testing.T) {
 	srv := setupTestServer(t)
@@ -619,5 +636,77 @@ func TestHandleMap_CodeOnlyParam(t *testing.T) {
 	text2 := result2.Content[0].(*mcpsdk.TextContent).Text
 	if !strings.Contains(text2, "CHANGELOG") {
 		t.Error("code_only=false should include markdown files")
+	}
+}
+
+// testWatcher implements watcher.Watcher for testing watchLoop.
+type testWatcher struct {
+	ch chan []watcher.Event
+}
+
+func (t *testWatcher) Watch(_ context.Context) <-chan []watcher.Event { return t.ch }
+func (t *testWatcher) Close() error                                   { return nil }
+
+func TestWatchLoop_ReindexTriggersFullIndex(t *testing.T) {
+	dim := 3
+	dbPath := t.TempDir() + "/reindex.db"
+	st, err := store.NewSQLiteStore(dbPath, "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
+	q := query.New(emb, st)
+
+	var indexCount int
+	var mu sync.Mutex
+	mock := &mockIndexer{
+		indexFn: func(_ context.Context) error {
+			mu.Lock()
+			indexCount++
+			mu.Unlock()
+			return nil
+		},
+	}
+	tw := &testWatcher{ch: make(chan []watcher.Event, 1)}
+
+	srv := mcp.NewServerWithIndexer(q, mock, tw, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	// Use a pipe so ServeIO blocks on reading (MCP loop waits for input).
+	r, w := io.Pipe()
+	defer w.Close()
+	defer r.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = srv.ServeIO(ctx, r, io.Discard)
+	}()
+
+	// Wait for the initial index to complete (ServeIO calls Index once).
+	time.Sleep(200 * time.Millisecond)
+
+	// Send a Reindex event through the watcher channel.
+	tw.ch <- []watcher.Event{{Op: watcher.Reindex}}
+
+	// Give watchLoop time to process the event.
+	time.Sleep(200 * time.Millisecond)
+
+	cancel()
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Initial index = 1 call, Reindex event = 1 call → total 2.
+	if indexCount != 2 {
+		t.Errorf("expected Index called 2 times (initial + reindex), got %d", indexCount)
+	}
+	if mock.filesCalled {
+		t.Error("IndexFiles should not be called when Reindex event is received")
 	}
 }

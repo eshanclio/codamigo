@@ -5,24 +5,28 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/ieshan/codamigo/config"
 )
 
 // fsnotifyWatcher implements [Watcher] using kernel-level filesystem
-// notifications via the fsnotify library. It registers all directories under
-// the project root with the OS and delivers debounced, batched events.
+// notifications (kqueue on macOS/BSD, inotify on Linux). It registers all
+// directories under the project root with the OS and delivers debounced,
+// batched events.
 type fsnotifyWatcher struct {
-	fw       *fsnotify.Watcher
+	bw       backend
+	events   <-chan fsEvent
+	errors   <-chan error
 	root     string
 	fsys     fs.FS
 	debounce time.Duration
 	matchFn  func(string) bool
+	probeFn  func(timeout time.Duration) bool
 }
 
 // newFSNotifyWatcher creates an fsnotifyWatcher and registers all directories
@@ -31,7 +35,7 @@ type fsnotifyWatcher struct {
 // caller should fall back to polling in that case. The returned watcher must
 // be closed via Close when no longer needed.
 func newFSNotifyWatcher(cfg *config.Config, matchFn func(string) bool, fsys fs.FS) (*fsnotifyWatcher, bool, error) {
-	fw, err := fsnotify.NewWatcher()
+	bw, events, errors, err := newBackendWatcher()
 	if err != nil {
 		return nil, false, err
 	}
@@ -42,7 +46,9 @@ func newFSNotifyWatcher(cfg *config.Config, matchFn func(string) bool, fsys fs.F
 	}
 
 	w := &fsnotifyWatcher{
-		fw:       fw,
+		bw:       bw,
+		events:   events,
+		errors:   errors,
 		root:     cfg.ProjectRoot,
 		fsys:     fsys,
 		debounce: debounce,
@@ -51,14 +57,14 @@ func newFSNotifyWatcher(cfg *config.Config, matchFn func(string) bool, fsys fs.F
 
 	watchLimitHit, err := w.addDirs()
 	if err != nil {
-		fw.Close()
+		bw.Close()
 		return nil, false, err
 	}
 
 	return w, watchLimitHit, nil
 }
 
-// addDirs walks root and registers every directory with the fsnotify watcher.
+// addDirs walks root and registers every directory with the OS watcher.
 // It returns watchLimitHit=true when a watch-limit syscall error is encountered,
 // in which case the walk is aborted early. matchFn is intentionally NOT applied
 // here — directories must always be watched to detect new file creation.
@@ -76,7 +82,7 @@ func (w *fsnotifyWatcher) addDirs() (watchLimitHit bool, err error) {
 			return fs.SkipDir
 		}
 		absPath := filepath.Join(w.root, rel)
-		if addErr := w.fw.Add(absPath); addErr != nil {
+		if addErr := w.bw.Add(absPath); addErr != nil {
 			if IsWatchLimitError(addErr) {
 				watchLimitHit = true
 				return fs.SkipAll
@@ -89,7 +95,7 @@ func (w *fsnotifyWatcher) addDirs() (watchLimitHit bool, err error) {
 	return watchLimitHit, err
 }
 
-// IsWatchLimitError reports whether err is a OS-level watch-limit error.
+// IsWatchLimitError reports whether err is an OS-level watch-limit error.
 // On Linux this is ENOSPC (inotify watch table full); on macOS it is EMFILE
 // (per-process file descriptor limit) or ENFILE (system-wide limit).
 func IsWatchLimitError(err error) bool {
@@ -111,25 +117,35 @@ func (w *fsnotifyWatcher) Watch(ctx context.Context) <-chan []Event {
 			select {
 			case <-ctx.Done():
 				return
-			case ev, ok := <-w.fw.Events:
+			case ev, ok := <-w.events:
 				if !ok {
 					return
+				}
+				if ev.Op.Has(fsCreate) {
+					w.maybeAddDir(ev.Name)
+				}
+				if ev.Op.Has(fsRemove) || ev.Op.Has(fsRename) {
+					w.maybeRemoveDir(ev.Name)
 				}
 				event := w.convertEvent(ev)
 				if event == nil {
 					continue
 				}
-				if ev.Op&fsnotify.Create != 0 {
-					w.maybeAddDir(ev.Name)
-				}
 				pending[event.Path] = *event
 				timer.Reset(w.debounce)
 
-			case err, ok := <-w.fw.Errors:
+			case err, ok := <-w.errors:
 				if !ok {
 					return
 				}
-				slog.Warn("fsnotify error", slog.Any("error", err))
+				if errors.Is(err, ErrEventOverflow) {
+					slog.Warn("fsnotify: event queue overflow detected; triggering full re-index",
+						slog.String("hint", "on Linux: increase fs.inotify.max_queued_events"))
+					pending["__reindex__"] = Event{Op: Reindex}
+					timer.Reset(w.debounce)
+				} else {
+					slog.Warn("fsnotify error", slog.Any("error", err))
+				}
 
 			case <-timer.C:
 				if len(pending) == 0 {
@@ -153,25 +169,25 @@ func (w *fsnotifyWatcher) Watch(ctx context.Context) <-chan []Event {
 }
 
 func (w *fsnotifyWatcher) Close() error {
-	return w.fw.Close()
+	return w.bw.Close()
 }
 
-func (w *fsnotifyWatcher) convertEvent(ev fsnotify.Event) *Event {
+func (w *fsnotifyWatcher) convertEvent(ev fsEvent) *Event {
 	// Skip events from .codamigo directory to prevent feedback loops.
 	for _, part := range strings.Split(filepath.ToSlash(ev.Name), "/") {
-		if part == ".codamigo" {
+		if part == ".codamigo" || part == ".watchprobe" {
 			return nil
 		}
 	}
 	var op Op
 	switch {
-	case ev.Op&fsnotify.Remove != 0:
+	case ev.Op.Has(fsRemove):
 		op = Remove
-	case ev.Op&fsnotify.Rename != 0:
+	case ev.Op.Has(fsRename):
 		op = Rename
-	case ev.Op&fsnotify.Create != 0:
+	case ev.Op.Has(fsCreate):
 		op = Create
-	case ev.Op&fsnotify.Write != 0:
+	case ev.Op.Has(fsWrite):
 		op = Write
 	default:
 		return nil
@@ -199,6 +215,18 @@ func (w *fsnotifyWatcher) convertEvent(ev fsnotify.Event) *Event {
 	return &Event{Path: ev.Name, Op: op}
 }
 
+func (w *fsnotifyWatcher) maybeRemoveDir(path string) {
+	if name := filepath.Base(path); name == ".git" || name == ".codamigo" {
+		return
+	}
+	if err := w.bw.Remove(path); err != nil {
+		if !errors.Is(err, ErrNonExistentWatch) {
+			slog.Warn("fsnotify: failed to remove watch for deleted directory",
+				slog.String("path", path), slog.Any("error", err))
+		}
+	}
+}
+
 func (w *fsnotifyWatcher) maybeAddDir(path string) {
 	relPath, relErr := filepath.Rel(w.root, path)
 	if relErr != nil {
@@ -211,7 +239,43 @@ func (w *fsnotifyWatcher) maybeAddDir(path string) {
 	if name := filepath.Base(path); name == ".git" || name == ".codamigo" {
 		return
 	}
-	if err = w.fw.Add(path); err != nil {
+	if err = w.bw.Add(path); err != nil {
 		slog.Warn("fsnotify: failed to watch new directory", slog.String("path", path), slog.Any("error", err))
+	}
+}
+
+// probe verifies that the kernel watcher is actually delivering events by
+// creating a temporary file and waiting for the corresponding Create event.
+// Returns true if the event was received within the timeout. This detects
+// environments where kernel notifications silently fail (e.g. Docker bind
+// mounts on macOS).
+//
+// probe must be called before Watch; it has exclusive access to the
+// events channel because the event loop goroutine has not started yet.
+func (w *fsnotifyWatcher) probe(timeout time.Duration) bool {
+	if w.probeFn != nil {
+		return w.probeFn(timeout)
+	}
+	probePath := filepath.Join(w.root, ".watchprobe")
+	defer os.Remove(probePath)
+
+	if err := os.WriteFile(probePath, []byte("probe"), 0o644); err != nil {
+		slog.Warn("fsnotify probe: cannot create probe file", slog.Any("error", err))
+		return true
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		select {
+		case ev, ok := <-w.events:
+			if !ok {
+				return false
+			}
+			if ev.Op.Has(fsCreate) && strings.HasSuffix(ev.Name, ".watchprobe") {
+				return true
+			}
+		case <-deadline.C:
+			return false
+		}
 	}
 }

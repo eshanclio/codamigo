@@ -222,6 +222,7 @@ embedding_rate_limit: 500.0           # sustained requests/second
 embedding_rate_burst: 100             # max burst above sustained rate
 embedding_max_retries: 3
 embedding_retry_base_delay: "500ms"   # e.g. "500ms", "1s"
+embedding_http_timeout: "60s"         # per-request timeout; increase for slow local backends
 
 # File filtering
 include_patterns: []                  # empty = include all matched extensions
@@ -251,6 +252,21 @@ debounce_window: "500ms"
 ```
 
 Keep `embedding_api_key` in the global config (written with mode `0600` by `init`) or in `CODAMIGO_API_KEY`. Do not put API keys in the project config.
+
+### Docker
+
+| Environment | Recommendation |
+|-------------|----------------|
+| Docker on Linux | `watch_mode: auto` works — inotify in the container shares the host kernel; auto-fallback handles watch limits |
+| Docker on macOS | Set `watch_mode: poll` — Docker Desktop's osxfs does not reliably propagate host-side filesystem changes into containers as kernel events |
+| Docker on Windows (WSL2) | Set `watch_mode: poll` — same bind-mount event propagation limitation as macOS |
+
+For Docker environments using polling, `poll_interval: "2s"` is a good default to reduce overhead:
+
+```yaml
+watch_mode: poll
+poll_interval: "2s"
+```
 
 ## Embedding providers
 

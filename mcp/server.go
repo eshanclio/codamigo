@@ -142,13 +142,24 @@ func (s *Server) watchLoop(ctx context.Context) {
 			if !ok {
 				return
 			}
+			var needsReindex bool
 			paths := make([]string, 0, len(events))
 			for _, e := range events {
+				if e.Op == watcher.Reindex {
+					needsReindex = true
+					continue
+				}
 				paths = append(paths, e.Path)
 			}
 			s.indexMu.Lock()
-			if err := s.indexer.IndexFiles(ctx, paths); err != nil {
-				slog.ErrorContext(ctx, "mcp: re-index failed", slog.Any("error", err))
+			if needsReindex {
+				if err := s.indexer.Index(ctx); err != nil {
+					slog.ErrorContext(ctx, "mcp: full re-index after overflow failed", slog.Any("error", err))
+				}
+			} else if len(paths) > 0 {
+				if err := s.indexer.IndexFiles(ctx, paths); err != nil {
+					slog.ErrorContext(ctx, "mcp: re-index failed", slog.Any("error", err))
+				}
 			}
 			s.indexMu.Unlock()
 		}

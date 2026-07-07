@@ -2,9 +2,11 @@ package watcher_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -478,5 +480,218 @@ func TestIsWatchLimitError(t *testing.T) {
 				t.Errorf("IsWatchLimitError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFSNotifyWatcher_CleansUpDeletedDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "existing.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		ProjectRoot:    root,
+		WatchMode:      "fsnotify",
+		DebounceWindow: 200 * time.Millisecond,
+	}
+
+	w, err := watcher.New(cfg, nil, os.DirFS(root))
+	if err != nil {
+		t.Skipf("fsnotify not available: %v", err)
+	}
+	defer w.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	ch := w.Watch(ctx)
+	time.Sleep(200 * time.Millisecond)
+
+	// Delete the subdirectory — should trigger a Remove event and cleanup.
+	if err := os.RemoveAll(filepath.Join(root, "subdir")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the remove event to be delivered.
+	select {
+	case <-ch:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for remove event")
+	}
+
+	// Create a new file in the root to verify the watcher still works
+	// after the directory deletion and watch cleanup.
+	if err := os.WriteFile(filepath.Join(root, "after_delete.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case events := <-ch:
+		found := false
+		for _, e := range events {
+			if filepath.Base(e.Path) == "after_delete.go" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected event for after_delete.go after dir deletion, got %v", events)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for event after directory deletion")
+	}
+}
+
+func TestErrorSentinels(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		sent error
+		want bool
+	}{
+		{"direct overflow", watcher.ErrEventOverflow, watcher.ErrEventOverflow, true},
+		{"wrapped overflow", fmt.Errorf("watch failed: %w", watcher.ErrEventOverflow), watcher.ErrEventOverflow, true},
+		{"direct non-existent", watcher.ErrNonExistentWatch, watcher.ErrNonExistentWatch, true},
+		{"wrapped non-existent", fmt.Errorf("remove: %w", watcher.ErrNonExistentWatch), watcher.ErrNonExistentWatch, true},
+		{"direct closed", watcher.ErrClosed, watcher.ErrClosed, true},
+		{"wrapped closed", fmt.Errorf("close: %w", watcher.ErrClosed), watcher.ErrClosed, true},
+		{"other error", fmt.Errorf("something else"), watcher.ErrEventOverflow, false},
+		{"nil", nil, watcher.ErrEventOverflow, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := errors.Is(tc.err, tc.sent)
+			if got != tc.want {
+				t.Errorf("errors.Is(%v, %v) = %v, want %v", tc.err, tc.sent, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFSNotifyWatcher_DetectsNewSubdir(t *testing.T) {
+	root := t.TempDir()
+
+	cfg := &config.Config{
+		ProjectRoot:    root,
+		WatchMode:      "fsnotify",
+		DebounceWindow: 200 * time.Millisecond,
+	}
+
+	w, err := watcher.New(cfg, nil, os.DirFS(root))
+	if err != nil {
+		t.Skipf("fsnotify not available: %v", err)
+	}
+	defer w.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	ch := w.Watch(ctx)
+	time.Sleep(300 * time.Millisecond)
+
+	subdir := filepath.Join(root, "newpkg")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the watcher to detect the new directory and add a watch for it.
+	time.Sleep(500 * time.Millisecond)
+	if err := os.WriteFile(filepath.Join(subdir, "new.go"), []byte("package newpkg"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case events := <-ch:
+		found := false
+		for _, e := range events {
+			if strings.HasSuffix(filepath.ToSlash(e.Path), "newpkg/new.go") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected event for newpkg/new.go, got %v", events)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for event from new subdirectory")
+	}
+}
+
+func TestFSNotifyWatcher_CloseNoLeak(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "existing.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		ProjectRoot:    root,
+		WatchMode:      "fsnotify",
+		DebounceWindow: 200 * time.Millisecond,
+	}
+
+	w, err := watcher.New(cfg, nil, os.DirFS(root))
+	if err != nil {
+		t.Skipf("fsnotify not available: %v", err)
+	}
+
+	before := runtime.NumGoroutine()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Give the readEvents goroutine time to exit.
+	time.Sleep(200 * time.Millisecond)
+
+	after := runtime.NumGoroutine()
+	if after > before {
+		t.Errorf("possible goroutine leak: before=%d after=%d", before, after)
+	}
+}
+
+func TestNew_AutoModeWithProbe(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "existing.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		ProjectRoot:    root,
+		WatchMode:      "auto",
+		DebounceWindow: 200 * time.Millisecond,
+	}
+
+	w, err := watcher.New(cfg, nil, os.DirFS(root))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer w.Close()
+
+	// In "auto" mode on a real filesystem, the probe should succeed and
+	// return an fsnotify watcher. Verify the watcher delivers events.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	ch := w.Watch(ctx)
+	time.Sleep(300 * time.Millisecond)
+
+	if err := os.WriteFile(filepath.Join(root, "probe_test.go"), []byte("package main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case events := <-ch:
+		found := false
+		for _, e := range events {
+			if filepath.Base(e.Path) == "probe_test.go" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected event for probe_test.go, got %v", events)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for event — probe may have incorrectly fallen back to polling")
 	}
 }

@@ -2,9 +2,10 @@
 // delivers batched, debounced events to callers.
 //
 // [Watcher] is the interface; [New] selects an implementation based on
-// [config.Config.WatchMode]: "fsnotify" for kernel-level notifications,
-// "poll" for periodic directory scanning, or "auto" which tries fsnotify
-// and falls back to polling. [Event] carries the changed path and [Op] type.
+// [config.Config.WatchMode]: "fsnotify" for kernel-level notifications
+// (kqueue on macOS/BSD, inotify on Linux), "poll" for periodic directory
+// scanning, or "auto" which tries kernel-level watching and falls back to
+// polling. [Event] carries the changed path and [Op] type.
 package watcher
 
 import (
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"time"
 
 	"github.com/ieshan/codamigo/config"
 )
@@ -28,6 +30,10 @@ const (
 	Remove
 	// Rename signals a file was renamed or moved.
 	Rename
+	// Reindex signals that the watcher detected a potential event loss
+	// (e.g. inotify queue overflow) and a full re-index should be performed
+	// to recover potentially missed changes.
+	Reindex
 )
 
 func (o Op) String() string {
@@ -40,6 +46,8 @@ func (o Op) String() string {
 		return "remove"
 	case Rename:
 		return "rename"
+	case Reindex:
+		return "reindex"
 	default:
 		return fmt.Sprintf("Op(%d)", int(o))
 	}
@@ -63,8 +71,9 @@ type Watcher interface {
 
 // New creates a Watcher based on cfg.WatchMode:
 //   - "poll": polling watcher
-//   - "fsnotify": fsnotify watcher (errors if unavailable)
-//   - "auto" or "": attempts fsnotify; falls back to polling on error or watch limit
+//   - "fsnotify": kernel-level watcher (errors if unavailable)
+//   - "auto" or "": attempts kernel-level watching; falls back to polling on
+//     error, watch limit, or failed event-delivery probe
 //
 // matchFn, when non-nil, is called to decide whether a file path should
 // produce events. Pass nil to use the include/exclude pattern logic only.
@@ -87,6 +96,12 @@ func New(cfg *config.Config, matchFn func(string) bool, fsys fs.FS) (Watcher, er
 			fw.Close()
 			slog.Warn("watch limit reached, falling back to polling",
 				slog.String("hint", "on Linux: increase fs.inotify.max_user_watches; on macOS: increase ulimit -n"))
+			return newPollWatcher(cfg, matchFn, fsys), nil
+		}
+		if !fw.probe(2 * time.Second) {
+			fw.Close()
+			slog.Warn("fsnotify probe failed — events not delivered; falling back to polling",
+				slog.String("hint", "this may indicate a Docker bind mount or network filesystem; set watch_mode: \"poll\" to skip this probe"))
 			return newPollWatcher(cfg, matchFn, fsys), nil
 		}
 		return fw, nil
