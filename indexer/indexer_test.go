@@ -54,6 +54,8 @@ func (f *fakeEmbedder) EmbedBatchPartial(ctx context.Context, texts []string) ([
 	return vectors, errs
 }
 
+func (f *fakeEmbedder) Dim() int { return f.dim }
+
 func TestNew(t *testing.T) {
 	dim := 3
 	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "test-model", dim)
@@ -211,6 +213,8 @@ func (f *failingEmbedder) EmbedBatchPartial(ctx context.Context, texts []string)
 	return vectors, errs
 }
 
+func (f *failingEmbedder) Dim() int { return f.dim }
+
 // partialEmbedder succeeds for all texts EXCEPT those whose content matches
 // any string in failTexts. Used to test per-chunk failure isolation.
 type partialEmbedder struct {
@@ -229,6 +233,8 @@ func (p *partialEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	}
 	return vectors, nil
 }
+
+func (p *partialEmbedder) Dim() int { return p.dim }
 
 func (p *partialEmbedder) EmbedBatchPartial(_ context.Context, texts []string) ([][]float32, []error) {
 	vectors := make([][]float32, len(texts))

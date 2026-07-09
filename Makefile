@@ -1,5 +1,5 @@
 .PHONY: build test fmt vet lint tidy clean \
-        test-config test-embedder \
+        test-config \
         test-store test-walker test-indexer test-query test-mcp
 
 # CGO_ENABLED=1 is required: go-code-chunker dependency compiles C sources via cgo.
@@ -16,9 +16,6 @@ test:
 
 test-config:
 	go test $(TAGS) ./config/...
-
-test-embedder:
-	go test $(TAGS) ./embedder/...
 
 test-store:
 	go test $(TAGS) ./store/...
@@ -40,7 +37,7 @@ run-test:
 	go test $(TAGS) $(PKG) -run $(TEST) -v
 
 fmt:
-	go fmt -w .
+	go fmt ./...
 
 vet:
 	go vet $(TAGS) ./...

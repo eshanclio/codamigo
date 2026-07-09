@@ -38,16 +38,16 @@ func mapCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			s, err := buildStore(cfg)
+			emb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
+			if err != nil {
+				return fmt.Errorf("creating embedder: %w", err)
+			}
+			s, err := buildStore(cfg, emb.Dim())
 			if err != nil {
 				return err
 			}
 			defer s.Close()
 
-			emb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
-			if err != nil {
-				return fmt.Errorf("creating embedder: %w", err)
-			}
 			q := query.New(emb, s)
 
 			maxTokens := cmd.Int("max-tokens")

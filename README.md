@@ -420,7 +420,7 @@ the config loading logic even if the function is called `Load`.
 
 **3. Scope searches to reduce noise.**
 Narrow results with the available filters:
-- `package` — restrict to one package, e.g. `"store"` or `"embedder/openaicompat"`
+- `package` — restrict to one package, e.g. `"store"` or `"cmd/codamigo"`
 - `languages` — e.g. `["go"]` to skip test fixtures in other languages
 - `node_kinds` — e.g. `["function_declaration", "method_declaration"]` to see only functions
 - `name` — exact symbol lookup, e.g. `"NewChunker"`
@@ -455,7 +455,7 @@ mcp__codamigo__get_map(max_tokens=3000, show_visibility=false)
 mcp__codamigo__get_map(max_tokens=3000, code_only=false)
 
 # Find all functions related to embedding
-mcp__codamigo__search(query="embedding API request", package="embedder/openaicompat", node_kinds=["function_declaration"])
+mcp__codamigo__search(query="embedding API request", package="cmd/codamigo", node_kinds=["function_declaration"])
 
 # Look up a specific symbol
 mcp__codamigo__search(query="walk directory tree", name="Walk", metadata_only=true)

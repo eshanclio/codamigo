@@ -27,8 +27,8 @@ import (
 
 	lru "github.com/hashicorp/golang-lru/v2"
 
-	"github.com/ieshan/codamigo/embedder"
 	"github.com/ieshan/codamigo/store"
+	"github.com/ieshan/go-embedder"
 )
 
 // Result is a matching code chunk returned by [Querier.Search] or

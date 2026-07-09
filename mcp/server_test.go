@@ -52,6 +52,8 @@ func (f *fakeEmbedder) EmbedBatchPartial(ctx context.Context, texts []string) ([
 	return vectors, errs
 }
 
+func (f *fakeEmbedder) Dim() int { return len(f.vec) }
+
 func setupTestServer(t *testing.T) *mcp.Server {
 	t.Helper()
 	dim := 3

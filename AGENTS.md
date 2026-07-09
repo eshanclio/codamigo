@@ -10,7 +10,7 @@ CGo is required (tree-sitter grammars include C sources). Ensure `cc` is on `PAT
 make build          # build all packages
 make test           # run all tests
 make test-config    # single-package (also: test-store, test-walker,
-                    #   test-indexer, test-query, test-mcp, test-embedder)
+                    #   test-indexer, test-query, test-mcp)
 make fmt            # format (go fmt)
 make vet            # static analysis
 make lint           # golangci-lint
@@ -27,10 +27,7 @@ Specialized one-off commands (no `make` target): `go build -gcflags='-m'` (escap
 Dependency order is strict and one-directional — no cycles.
 
 ```
-config    embedder            store
-             ↑
-          embedder/
-          openaicompat
+config              store
                   walker ────────────────┐
                   watcher ───────────────┤
                   indexer ◄──────────────┤
@@ -45,11 +42,14 @@ config    embedder            store
               github.com/ieshan/go-code-chunker
                 ├── chunker/  (cAST algorithm)
                 └── langs/    (language configs, CGo)
+              github.com/ieshan/go-embedder
+                ├── embedder/ (Embedder interface)
+                └── openai/   (OpenAI-compatible client)
 ```
 
 - `github.com/ieshan/go-code-chunker` — external module providing `chunker/` (cAST algorithm) and `langs/` (per-language configs with CGo grammars); imported only by `cmd/codamigo`
+- `github.com/ieshan/go-embedder` — external module providing `embedder.Embedder` interface and `openai.Client` implementation; imported by `indexer`, `query`, and `cmd/codamigo`
 - `config/` — `Config` struct; no internal imports
-- `embedder/` — interface only; impl in `embedder/openaicompat/`
 - `store/` — `Store` interface + sqlite-vec; never imports `go-code-chunker/chunker`
 - `walker/` — recursive FS walk + gitignore + include/exclude filtering
 - `watcher/` — fsnotify + poll watcher implementations

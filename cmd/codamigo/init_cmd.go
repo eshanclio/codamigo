@@ -15,7 +15,7 @@ import (
 	"go.yaml.in/yaml/v4"
 
 	"github.com/ieshan/codamigo/config"
-	"github.com/ieshan/codamigo/embedder/openaicompat"
+	"github.com/ieshan/go-embedder/openai"
 	"github.com/urfave/cli/v3"
 )
 
@@ -96,7 +96,7 @@ func initCmd() *cli.Command {
 
 			// Smoke-test the embedding model.
 			fmt.Printf("\nTesting embedding model: %s\n", model)
-			emb, err := openaicompat.New(openaicompat.Options{
+			emb, err := openai.New(openai.Options{
 				BaseURL: baseURL,
 				APIKey:  apiKey,
 				Model:   model,

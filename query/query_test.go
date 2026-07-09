@@ -38,6 +38,8 @@ func (f *fakeEmbedder) EmbedBatchPartial(ctx context.Context, texts []string) ([
 	return vectors, errs
 }
 
+func (f *fakeEmbedder) Dim() int { return len(f.vec) }
+
 func TestQuerier_Search(t *testing.T) {
 	dim := 3
 	dbPath := t.TempDir() + "/test.db"
@@ -180,7 +182,7 @@ func TestPackageFromPath(t *testing.T) {
 	}{
 		{"top-level file", "/repo", "/repo/main.go", "."},
 		{"single-level package", "/repo", "/repo/store/sqlite.go", "store"},
-		{"nested package", "/repo", "/repo/embedder/openaicompat/client.go", "embedder/openaicompat"},
+		{"nested package", "/repo", "/repo/internal/parser/lex.go", "internal/parser"},
 		{"cmd package", "/repo", "/repo/cmd/codamigo/main.go", "cmd/codamigo"},
 	}
 	for _, tt := range tests {
@@ -498,6 +500,8 @@ func (c *countingEmbedder) EmbedBatchPartial(ctx context.Context, texts []string
 	}
 	return vectors, errs
 }
+
+func (c *countingEmbedder) Dim() int { return len(c.vec) }
 
 func TestQuerier_CacheHit(t *testing.T) {
 	dim := 3

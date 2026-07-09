@@ -174,7 +174,7 @@ type SearchInput struct {
 	Languages    []string `json:"languages,omitempty" jsonschema:"Filter results by programming language (e.g. [\"go\", \"python\"])"`
 	Paths        []string `json:"paths,omitempty" jsonschema:"Glob patterns to restrict search scope (e.g. [\"cmd/**\"])"`
 	MaxTokens    int      `json:"max_tokens,omitempty" jsonschema:"Token budget for results. 0 = no limit (default 0)"`
-	Package      string   `json:"package,omitempty" jsonschema:"Filter results to a package (e.g. \"store\", \"embedder/openaicompat\")"`
+	Package      string   `json:"package,omitempty" jsonschema:"Filter results to a package (e.g. \"store\", \"cmd/codamigo\")"`
 	RefreshIndex bool     `json:"refresh_index,omitempty" jsonschema:"Force a full re-index before querying (default false)"`
 	Name         string   `json:"name,omitempty" jsonschema:"Filter results to chunks matching this symbol name (e.g. \"Search\", \"NewChunker\")"`
 	NodeKinds    []string `json:"node_kinds,omitempty" jsonschema:"Filter by AST node kind (e.g. [\"function_declaration\", \"type_declaration\"])"`

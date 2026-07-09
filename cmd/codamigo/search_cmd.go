@@ -95,7 +95,11 @@ func searchCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			s, err := buildStore(cfg)
+			emb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
+			if err != nil {
+				return fmt.Errorf("creating embedder: %w", err)
+			}
+			s, err := buildStore(cfg, emb.Dim())
 			if err != nil {
 				return err
 			}
@@ -110,10 +114,6 @@ func searchCmd() *cli.Command {
 			nodeKinds := cmd.StringSlice("node-kind")
 			metadataOnly := cmd.Bool("metadata-only")
 
-			emb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
-			if err != nil {
-				return fmt.Errorf("creating embedder: %w", err)
-			}
 			q := query.New(emb, s)
 			opts := query.SearchOptions{
 				Limit:        limit,

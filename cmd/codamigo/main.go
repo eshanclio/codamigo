@@ -12,7 +12,6 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/ieshan/codamigo/config"
-	"github.com/ieshan/codamigo/embedder/openaicompat"
 	"github.com/ieshan/codamigo/indexer"
 	"github.com/ieshan/codamigo/mcp"
 	"github.com/ieshan/codamigo/query"
@@ -21,6 +20,7 @@ import (
 	"github.com/ieshan/codamigo/watcher"
 	"github.com/ieshan/go-code-chunker/chunker"
 	"github.com/ieshan/go-code-chunker/langs"
+	"github.com/ieshan/go-embedder/openai"
 )
 
 // commonFlags are included in every subcommand. Each flag reads its value from
@@ -101,17 +101,16 @@ func indexCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			c, s, w, err := buildComponents(cfg)
+			emb, err := newEmbedder(cfg, cfg.EmbeddingIndexInputType)
+			if err != nil {
+				return fmt.Errorf("creating embedder: %w", err)
+			}
+			c, s, w, err := buildComponents(cfg, emb.Dim())
 			if err != nil {
 				return err
 			}
 			defer s.Close()
 			defer w.Close() //nolint:errcheck
-
-			emb, err := newEmbedder(cfg, cfg.EmbeddingIndexInputType)
-			if err != nil {
-				return fmt.Errorf("creating embedder: %w", err)
-			}
 
 			// Wrap ctx so the TUI can cancel the indexer directly via ctrl+c.
 			// In TTY mode the terminal is in raw mode (ISIG cleared), so ctrl+c
@@ -193,16 +192,16 @@ func serveCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			c, s, w, err := buildComponents(cfg)
+			indexEmb, err := newEmbedder(cfg, cfg.EmbeddingIndexInputType)
+			if err != nil {
+				return fmt.Errorf("creating embedder: %w", err)
+			}
+			c, s, w, err := buildComponents(cfg, indexEmb.Dim())
 			if err != nil {
 				return err
 			}
 			defer s.Close()
 			defer w.Close()
-			indexEmb, err := newEmbedder(cfg, cfg.EmbeddingIndexInputType)
-			if err != nil {
-				return fmt.Errorf("creating embedder: %w", err)
-			}
 			queryEmb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
@@ -306,8 +305,8 @@ func flagsToConfig(cmd *cli.Command) *config.Config {
 	return cfg
 }
 
-func buildStore(cfg *config.Config) (store.Store, error) {
-	s, err := store.NewSQLiteStore(cfg.StorePath, cfg.EmbeddingModel, cfg.EmbeddingDimensions)
+func buildStore(cfg *config.Config, dim int) (store.Store, error) {
+	s, err := store.NewSQLiteStore(cfg.StorePath, cfg.EmbeddingModel, dim)
 	if err != nil {
 		return nil, fmt.Errorf("opening store: %w", err)
 	}
@@ -339,13 +338,13 @@ func buildExtensionFilter(langConfigs []chunker.LanguageConfig) func(string) boo
 	}
 }
 
-func buildComponents(cfg *config.Config) (*chunker.Chunker, store.Store, *walker.Walker, error) {
+func buildComponents(cfg *config.Config, dim int) (*chunker.Chunker, store.Store, *walker.Walker, error) {
 	allLangs := langs.AllLanguages()
 	c, err := chunker.NewChunker(allLangs, chunker.DefaultConfig())
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("creating chunker: %w", err)
 	}
-	s, err := store.NewSQLiteStore(cfg.StorePath, cfg.EmbeddingModel, cfg.EmbeddingDimensions)
+	s, err := store.NewSQLiteStore(cfg.StorePath, cfg.EmbeddingModel, dim)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("opening store: %w", err)
 	}
@@ -358,8 +357,8 @@ func buildComponents(cfg *config.Config) (*chunker.Chunker, store.Store, *walker
 	return c, s, w, nil
 }
 
-func newEmbedder(cfg *config.Config, inputType string) (*openaicompat.Client, error) {
-	return openaicompat.New(openaicompat.Options{
+func newEmbedder(cfg *config.Config, inputType string) (*openai.Client, error) {
+	return openai.New(openai.Options{
 		BaseURL:        cfg.EmbeddingBaseURL,
 		APIKey:         cfg.EmbeddingAPIKey,
 		Model:          cfg.EmbeddingModel,

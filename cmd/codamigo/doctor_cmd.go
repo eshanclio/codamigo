@@ -76,7 +76,7 @@ func doctorCmd() *cli.Command {
 
 			// ── 4. Index stats (only if store exists) ──────────────────────────
 			if storeExists {
-				s, err := buildStore(cfg)
+				s, err := buildStore(cfg, cfg.EmbeddingDimensions)
 				if err != nil {
 					fmt.Printf("[FAIL] Store open error: %v\n", err)
 				} else {
