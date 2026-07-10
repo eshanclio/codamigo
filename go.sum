@@ -38,6 +38,8 @@ github.com/ieshan/go-code-chunker v0.0.1 h1:elTqmZQKcYvyaUOz8Z7VSYR9nnHaE20XvNV1
 github.com/ieshan/go-code-chunker v0.0.1/go.mod h1:ZCW46oOlLjhYfE1U4jTBxxoDuSYiAFOjGtUFWaEGdl0=
 github.com/ieshan/go-embedder v0.0.2 h1:HAbgyVehpqMUOX5IMnOuTqZTDNpppbjOHZglksw6JF8=
 github.com/ieshan/go-embedder v0.0.2/go.mod h1:MRpVUbUVgDoydACZr5Nk+QHGVvBzNnraNQBKG69WS1g=
+github.com/ieshan/go-embedder v0.0.3 h1:lEbm699A7fNHW4+qUio5HYGGmovXTly7/82pIjCKfGA=
+github.com/ieshan/go-embedder v0.0.3/go.mod h1:83wkyWzxFs6xwGsNSDwz9M0Oi42NulhhV1GvdZm2jbY=
 github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW4TvVgFr4=
 github.com/lucasb-eyer/go-colorful v1.4.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-pointer v0.0.1 h1:n+XhsuGeVO6MEAp7xyEukFINEa+Quek5psIR/ylA6o0=

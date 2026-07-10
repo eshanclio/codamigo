@@ -8,7 +8,7 @@ require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/ieshan/go-code-chunker v0.0.1
-	github.com/ieshan/go-embedder v0.0.2
+	github.com/ieshan/go-embedder v0.0.3
 	github.com/mattn/go-sqlite3 v1.14.47
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/urfave/cli/v3 v3.10.1
