@@ -9,6 +9,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/ieshan/codamigo/config"
 	"github.com/ieshan/codamigo/query"
 )
 
@@ -99,7 +100,11 @@ func searchCmd() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
-			s, err := buildStore(cfg, emb.Dim())
+			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
+			if err != nil {
+				return fmt.Errorf("resolving store path: %w", err)
+			}
+			s, err := buildStore(storePath, cfg.EmbeddingModel, emb.Dim())
 			if err != nil {
 				return err
 			}

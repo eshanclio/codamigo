@@ -219,9 +219,6 @@ func TestDefaults(t *testing.T) {
 	if d.EmbeddingRetryBaseDelay != 500*time.Millisecond {
 		t.Errorf("EmbeddingRetryBaseDelay = %v", d.EmbeddingRetryBaseDelay)
 	}
-	if d.StorePath != ".codamigo/store.db" {
-		t.Errorf("StorePath = %q", d.StorePath)
-	}
 	if d.WatchMode != "auto" {
 		t.Errorf("WatchMode = %q", d.WatchMode)
 	}
@@ -274,11 +271,11 @@ func writeTempConfig(t *testing.T, content string) string {
 func ExampleDefaults() {
 	cfg := config.Defaults()
 	fmt.Println(cfg.EmbeddingModel)
-	fmt.Println(cfg.StorePath)
+	fmt.Println(cfg.WatchMode)
 	fmt.Println(cfg.PollInterval)
 	// Output:
 	// text-embedding-3-small
-	// .codamigo/store.db
+	// auto
 	// 5s
 }
 
@@ -286,15 +283,15 @@ func ExampleConfig_Merge() {
 	base := config.Defaults()
 	overlay := &config.Config{
 		EmbeddingModel: "voyage-code-3",
-		StorePath:      "custom/store.db",
+		WatchMode:      "poll",
 	}
 	merged := base.Merge(overlay)
 	fmt.Println(merged.EmbeddingModel)
-	fmt.Println(merged.StorePath)
+	fmt.Println(merged.WatchMode)
 	fmt.Println(merged.EmbeddingDimensions) // unchanged from base
 	// Output:
 	// voyage-code-3
-	// custom/store.db
+	// poll
 	// 1536
 }
 
@@ -543,5 +540,108 @@ func TestWriteBatchSize_Validate(t *testing.T) {
 	cfg.WriteBatchSize = -1
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected validation error for negative WriteBatchSize")
+	}
+}
+
+// ---- Project hash and paths ----
+
+func TestProjectHash(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"trailing slash", "/home/user1/project1/"},
+		{"no trailing slash", "/home/user1/project1"},
+		{"leading slash only", "/home"},
+		{"root", "/"},
+		{"empty", ""},
+	}
+	hashes := make(map[string]string, len(tests))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := config.ProjectHash(tt.path)
+			hashes[tt.path] = h
+			if len(h) != 40 {
+				t.Errorf("hash length = %d, want 40", len(h))
+			}
+			for _, c := range h {
+				if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+					t.Errorf("hash contains non-hex char %q in %q", c, h)
+				}
+			}
+		})
+	}
+
+	// Trailing slash and no trailing slash must produce the same hash.
+	if hashes["/home/user1/project1/"] != hashes["/home/user1/project1"] {
+		t.Errorf("trailing slash should not affect hash: %q vs %q",
+			hashes["/home/user1/project1/"], hashes["/home/user1/project1"])
+	}
+
+	// Different paths must produce different hashes.
+	if hashes["/home/user1/project1"] == hashes["/home"] {
+		t.Error("different paths produced the same hash")
+	}
+
+	// Deterministic: re-compute and compare.
+	h1 := config.ProjectHash("/home/user1/project1")
+	h2 := config.ProjectHash("/home/user1/project1")
+	if h1 != h2 {
+		t.Errorf("hash not deterministic: %q vs %q", h1, h2)
+	}
+}
+
+func TestDefaultStorePath(t *testing.T) {
+	p, err := config.DefaultStorePath("/home/user/project")
+	if err != nil {
+		t.Fatalf("DefaultStorePath: %v", err)
+	}
+	if !strings.HasSuffix(p, "/store.db") {
+		t.Errorf("path %q should end with /store.db", p)
+	}
+	if !strings.Contains(p, ".codamigo/projects/") {
+		t.Errorf("path %q should contain .codamigo/projects/", p)
+	}
+	// Verify the hash segment is 40 hex chars.
+	parts := strings.Split(p, string(filepath.Separator))
+	var hashSegment string
+	for _, part := range parts {
+		if len(part) == 40 {
+			hashSegment = part
+			break
+		}
+	}
+	if hashSegment == "" {
+		t.Errorf("path %q should contain a 40-char hash segment", p)
+	}
+	// Determinism.
+	p2, _ := config.DefaultStorePath("/home/user/project")
+	if p != p2 {
+		t.Errorf("DefaultStorePath not deterministic: %q vs %q", p, p2)
+	}
+}
+
+func TestProjectDataDir_NoHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	_, err := config.ProjectDataDir("/some/path")
+	if err == nil {
+		t.Fatal("expected error when home directory cannot be determined")
+	}
+	if !strings.Contains(err.Error(), "home directory") {
+		t.Errorf("error should mention home directory, got: %v", err)
+	}
+}
+
+func TestHomeProjectConfigPath(t *testing.T) {
+	p, err := config.HomeProjectConfigPath("/home/user/project")
+	if err != nil {
+		t.Fatalf("HomeProjectConfigPath: %v", err)
+	}
+	if !strings.HasSuffix(p, "/settings.yml") {
+		t.Errorf("path %q should end with /settings.yml", p)
+	}
+	if !strings.Contains(p, ".codamigo/projects/") {
+		t.Errorf("path %q should contain .codamigo/projects/", p)
 	}
 }

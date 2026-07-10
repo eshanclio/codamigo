@@ -48,15 +48,34 @@ func doctorCmd() *cli.Command {
 			}
 
 			// ── 2. Project config ──────────────────────────────────────────────
+			// Resolve project root for home config path lookup (non-fatal in doctor).
+			doctorProjectRoot := ""
+			if cmd.IsSet("project-root") {
+				doctorProjectRoot = cmd.String("project-root")
+			}
+			if doctorProjectRoot == "" {
+				if wd, err := os.Getwd(); err == nil {
+					doctorProjectRoot = wd
+				}
+			}
+			if doctorProjectRoot != "" {
+				if homeProjectPath, err := config.HomeProjectConfigPath(doctorProjectRoot); err == nil {
+					if _, err := os.Stat(homeProjectPath); err == nil {
+						fmt.Printf("[OK]  Home project config: %s\n", homeProjectPath)
+					} else {
+						fmt.Printf("[--]  Home project config not found (using in-project)\n")
+					}
+				}
+			}
 			projectPath := config.ProjectConfigPath()
 			_, projectErr := config.Load(projectPath)
 			switch {
 			case errors.Is(projectErr, fs.ErrNotExist):
-				fmt.Printf("[OK]  Project config not found (using defaults)\n")
+				fmt.Printf("[OK]  In-project config not found (using defaults)\n")
 			case projectErr != nil:
-				fmt.Printf("[FAIL] Project config parse error: %v\n", projectErr)
+				fmt.Printf("[FAIL] In-project config parse error: %v\n", projectErr)
 			default:
-				fmt.Printf("[OK]  Project config: %s\n", projectPath)
+				fmt.Printf("[OK]  In-project config: %s\n", projectPath)
 			}
 
 			// Load the merged config for subsequent checks.
@@ -66,9 +85,13 @@ func doctorCmd() *cli.Command {
 			}
 
 			// ── 3. Store ───────────────────────────────────────────────────────
+			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
+			if err != nil {
+				return fmt.Errorf("resolving store path: %w", err)
+			}
 			storeExists := false
-			if _, err := os.Stat(cfg.StorePath); err == nil {
-				fmt.Printf("[OK]  Store: %s\n", cfg.StorePath)
+			if _, err := os.Stat(storePath); err == nil {
+				fmt.Printf("[OK]  Store: %s\n", storePath)
 				storeExists = true
 			} else {
 				fmt.Printf("[FAIL] Store not found — run 'codamigo index'\n")
@@ -76,7 +99,7 @@ func doctorCmd() *cli.Command {
 
 			// ── 4. Index stats (only if store exists) ──────────────────────────
 			if storeExists {
-				s, err := buildStore(cfg, cfg.EmbeddingDimensions)
+				s, err := buildStore(storePath, cfg.EmbeddingModel, cfg.EmbeddingDimensions)
 				if err != nil {
 					fmt.Printf("[FAIL] Store open error: %v\n", err)
 				} else {

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ieshan/codamigo/config"
 	"github.com/urfave/cli/v3"
 )
 
@@ -29,7 +30,11 @@ func resetCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			return runReset(cfg.StorePath, cmd.Bool("force"), os.Stdin, os.Stdout)
+			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
+			if err != nil {
+				return fmt.Errorf("resolving store path: %w", err)
+			}
+			return runReset(storePath, cmd.Bool("force"), os.Stdin, os.Stdout)
 		},
 	}
 }

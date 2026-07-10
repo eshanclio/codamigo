@@ -94,6 +94,25 @@ func initCmd() *cli.Command {
 				fmt.Fprintf(os.Stderr, "Warning: could not update .gitignore: %v\n", err)
 			}
 
+			// Write project_path file for human traceability (best-effort).
+			if wd != "" {
+				dataDir, err := config.ProjectDataDir(wd)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not resolve data directory: %v\n", err)
+				} else if err := os.MkdirAll(dataDir, 0o755); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not create data directory: %v\n", err)
+				} else {
+					pathFile := filepath.Join(dataDir, "project_path")
+					if err := os.WriteFile(pathFile, []byte(wd), 0o644); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: could not write project_path: %v\n", err)
+					}
+				}
+
+				if storePath, err := config.DefaultStorePath(wd); err == nil {
+					fmt.Printf("Store location: %s\n", storePath)
+				}
+			}
+
 			// Smoke-test the embedding model.
 			fmt.Printf("\nTesting embedding model: %s\n", model)
 			emb, err := openai.New(openai.Options{

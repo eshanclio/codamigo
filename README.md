@@ -98,7 +98,6 @@ When stderr is a TTY, a live 2-line progress display shows running processed/ski
 | `--api-key` | `CODAMIGO_API_KEY` | — | Embedding API key |
 | `--model` | `CODAMIGO_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `--base-url` | `CODAMIGO_BASE_URL` | `https://api.openai.com/v1` | Embedding API base URL |
-| `--store-path` | `CODAMIGO_STORE_PATH` | `.codamigo/store.db` | SQLite store file path |
 | `--project-root` | `CODAMIGO_PROJECT_ROOT` | current directory | Root directory to index |
 | `--dimensions` | `CODAMIGO_DIMENSIONS` | `1536` | Embedding vector dimensions |
 | `--global-config` | `CODAMIGO_GLOBAL_CONFIG` | `~/.codamigo/global_settings.yml` | Path to global config |
@@ -233,9 +232,6 @@ non_code_languages:           # languages excluded by code_only filter
   - markdown                  # default: ["markdown", "yaml", "json"]
   - yaml
   - json
-
-# Storage
-store_path: .codamigo/store.db
 
 # Project
 project_root: ""                      # defaults to current working directory

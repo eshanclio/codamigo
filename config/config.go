@@ -1,14 +1,18 @@
 // Package config owns the unified runtime configuration for codamigo.
 //
-// Configuration is loaded in four layers, with later sources winning:
-// built-in defaults → global YAML file → project YAML file → environment
-// variables → CLI flags. [Defaults] provides the built-in defaults; [Load]
-// reads a YAML file; [LoadOrDefault] returns an empty [Config] instead of an
-// error when the file is absent; [Config.Merge] applies a second [Config] on
-// top of an existing one, with non-zero fields winning.
+// Configuration is loaded in five layers, with later sources winning:
+// built-in defaults → global YAML file → home project YAML file → in-project
+// YAML file → CLI flags. The home project config lives at
+// ~/.codamigo/projects/<hash>/settings.yml; if absent, the in-project
+// .codamigo/settings.yml is used as fallback. [Defaults] provides the built-in
+// defaults; [Load] reads a YAML file; [LoadOrDefault] returns an empty [Config]
+// instead of an error when the file is absent; [Config.Merge] applies a second
+// [Config] on top of an existing one, with non-zero fields winning.
 package config
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v4"
@@ -24,8 +29,9 @@ import (
 
 // Config holds the unified runtime configuration for codamigo.
 //
-// Configuration is loaded in layers with later sources winning:
-// built-in defaults → global YAML file → project YAML file → env vars → CLI flags.
+// Configuration is loaded in five layers with later sources winning:
+// built-in defaults → global YAML file → home project YAML file → in-project
+// YAML file → CLI flags (which absorb env vars).
 //
 // Duration fields are tagged yaml:"-" because they are parsed from human-readable
 // strings (e.g. "500ms", "5s") via the unexported fileConfig intermediary.
@@ -61,8 +67,6 @@ type Config struct {
 	IncludePatterns []string `yaml:"include_patterns"`
 	// ExcludePatterns skips files matching these glob patterns during indexing.
 	ExcludePatterns []string `yaml:"exclude_patterns"`
-	// StorePath is the path to the sqlite-vec database file.
-	StorePath string `yaml:"store_path"`
 	// ProjectRoot is the root directory to walk for source files.
 	ProjectRoot string `yaml:"project_root"`
 	// WatchMode controls the filesystem watcher strategy: "auto", "fsnotify", or "poll".
@@ -102,7 +106,6 @@ type fileConfig struct {
 	EmbeddingHTTPTimeout    string   `yaml:"embedding_http_timeout"`
 	IncludePatterns         []string `yaml:"include_patterns"`
 	ExcludePatterns         []string `yaml:"exclude_patterns"`
-	StorePath               string   `yaml:"store_path"`
 	ProjectRoot             string   `yaml:"project_root"`
 	WatchMode               string   `yaml:"watch_mode"`
 	PollInterval            string   `yaml:"poll_interval"`
@@ -171,7 +174,6 @@ func (fc *fileConfig) toConfig() (*Config, error) {
 		EmbeddingHTTPTimeout:    httpTimeout,
 		IncludePatterns:         fc.IncludePatterns,
 		ExcludePatterns:         fc.ExcludePatterns,
-		StorePath:               fc.StorePath,
 		ProjectRoot:             fc.ProjectRoot,
 		WatchMode:               fc.WatchMode,
 		PollInterval:            pollInterval,
@@ -197,7 +199,6 @@ func Defaults() *Config {
 		EmbeddingMaxRetries:     3,
 		EmbeddingRetryBaseDelay: 500 * time.Millisecond,
 		EmbeddingHTTPTimeout:    60 * time.Second,
-		StorePath:               ".codamigo/store.db",
 		WatchMode:               "auto",
 		PollInterval:            5 * time.Second,
 		DebounceWindow:          500 * time.Millisecond,
@@ -225,9 +226,54 @@ func GlobalConfigPath() (string, error) {
 	return filepath.Join(home, ".codamigo", "global_settings.yml"), nil
 }
 
-// ProjectConfigPath returns the path to the per-project config file.
+// ProjectConfigPath returns the path to the in-project config file.
 func ProjectConfigPath() string {
 	return filepath.Join(".codamigo", "settings.yml")
+}
+
+// ProjectHash returns a deterministic SHA-1 hash identifying the project at
+// projectRoot. Leading and trailing slashes are trimmed before hashing so
+// that "/home/user/project/" and "/home/user/project" produce the same hash.
+func ProjectHash(projectRoot string) string {
+	trimmed := strings.Trim(projectRoot, "/")
+	sum := sha1.Sum([]byte(trimmed))
+	return hex.EncodeToString(sum[:])
+}
+
+// ProjectDataDir returns the per-project data directory under $HOME/.codamigo.
+// The directory is named by [ProjectHash]. Callers must create it with
+// os.MkdirAll before writing files into it.
+//
+// Unlike [GlobalConfigPath], this function does not honor XDG_CONFIG_HOME
+// because the directory contains both data (store.db) and config
+// (settings.yml); splitting them across XDG directories would complicate the
+// layout.
+func ProjectDataDir(projectRoot string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determining home directory: %w", err)
+	}
+	return filepath.Join(home, ".codamigo", "projects", ProjectHash(projectRoot)), nil
+}
+
+// DefaultStorePath returns the default SQLite store path for the project at
+// projectRoot: $HOME/.codamigo/projects/<hash>/store.db.
+func DefaultStorePath(projectRoot string) (string, error) {
+	dir, err := ProjectDataDir(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "store.db"), nil
+}
+
+// HomeProjectConfigPath returns the path to the per-project config file stored
+// under $HOME: $HOME/.codamigo/projects/<hash>/settings.yml.
+func HomeProjectConfigPath(projectRoot string) (string, error) {
+	dir, err := ProjectDataDir(projectRoot)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "settings.yml"), nil
 }
 
 // Load reads a Config from a YAML file at path.
@@ -314,9 +360,6 @@ func (c *Config) Merge(o *Config) *Config {
 	}
 	if o.ExcludePatterns != nil {
 		out.ExcludePatterns = slices.Clone(o.ExcludePatterns)
-	}
-	if o.StorePath != "" {
-		out.StorePath = o.StorePath
 	}
 	if o.ProjectRoot != "" {
 		out.ProjectRoot = o.ProjectRoot

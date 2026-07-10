@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -42,11 +44,6 @@ var commonFlags = []cli.Flag{
 		Sources: cli.EnvVars("CODAMIGO_BASE_URL"),
 	},
 	&cli.StringFlag{
-		Name:    "store-path",
-		Usage:   "path to SQLite store file",
-		Sources: cli.EnvVars("CODAMIGO_STORE_PATH"),
-	},
-	&cli.StringFlag{
 		Name:    "project-root",
 		Usage:   "project root directory to index",
 		Sources: cli.EnvVars("CODAMIGO_PROJECT_ROOT"),
@@ -63,7 +60,7 @@ var commonFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:    "project-config",
-		Usage:   "path to project config file (default: .codamigo/settings.yml)",
+		Usage:   "path to project config file (overrides default lookup)",
 		Sources: cli.EnvVars("CODAMIGO_PROJECT_CONFIG"),
 	},
 }
@@ -105,7 +102,11 @@ func indexCmd() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
-			c, s, w, err := buildComponents(cfg, emb.Dim())
+			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
+			if err != nil {
+				return fmt.Errorf("resolving store path: %w", err)
+			}
+			c, s, w, err := buildComponents(cfg, storePath, emb.Dim())
 			if err != nil {
 				return err
 			}
@@ -196,7 +197,11 @@ func serveCmd() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
-			c, s, w, err := buildComponents(cfg, indexEmb.Dim())
+			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
+			if err != nil {
+				return fmt.Errorf("resolving store path: %w", err)
+			}
+			c, s, w, err := buildComponents(cfg, storePath, indexEmb.Dim())
 			if err != nil {
 				return err
 			}
@@ -219,8 +224,10 @@ func serveCmd() *cli.Command {
 	}
 }
 
-// loadConfig assembles the final Config by merging four layers in priority order:
-// built-in defaults → global file → project file → CLI flags (which absorb env vars).
+// loadConfig assembles the final Config by merging five layers in priority order:
+// built-in defaults → global file → home project file → in-project file → CLI flags.
+// The home project config is loaded from ~/.codamigo/projects/<hash>/settings.yml;
+// if absent, the in-project .codamigo/settings.yml is used as fallback.
 func loadConfig(cmd *cli.Command) (*config.Config, error) {
 	globalPath, err := config.GlobalConfigPath()
 	if err != nil {
@@ -236,17 +243,6 @@ func loadConfig(cmd *cli.Command) (*config.Config, error) {
 			return nil, fmt.Errorf("global config: %w", err)
 		}
 	}
-	projectPath := config.ProjectConfigPath()
-	if cmd.IsSet("project-config") {
-		wd, err := os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("determining working directory: %w", err)
-		}
-		projectPath, err = safeConfigPath(wd, cmd.String("project-config"))
-		if err != nil {
-			return nil, fmt.Errorf("project config: %w", err)
-		}
-	}
 
 	cfg := config.Defaults()
 
@@ -256,14 +252,15 @@ func loadConfig(cmd *cli.Command) (*config.Config, error) {
 	}
 	cfg = cfg.Merge(globalCfg)
 
-	projectCfg, err := config.LoadOrDefault(projectPath)
-	if err != nil {
-		return nil, fmt.Errorf("project config: %w", err)
+	// Compute flags once — reused for early ProjectRoot resolution and final merge.
+	flagCfg := flagsToConfig(cmd)
+
+	// Resolve ProjectRoot early — needed for HomeProjectConfigPath.
+	// project_root in a project config would be circular, so we only
+	// consider defaults, global config, and flags here.
+	if flagCfg.ProjectRoot != "" {
+		cfg.ProjectRoot = flagCfg.ProjectRoot
 	}
-	cfg = cfg.Merge(projectCfg)
-
-	cfg = cfg.Merge(flagsToConfig(cmd))
-
 	if cfg.ProjectRoot == "" {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -271,6 +268,40 @@ func loadConfig(cmd *cli.Command) (*config.Config, error) {
 		}
 		cfg.ProjectRoot = wd
 	}
+
+	// Load project config: home first, fallback to in-project.
+	// --project-config overrides both layers.
+	var projectCfg *config.Config
+	if cmd.IsSet("project-config") {
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("determining working directory: %w", err)
+		}
+		projectPath, err := safeConfigPath(wd, cmd.String("project-config"))
+		if err != nil {
+			return nil, fmt.Errorf("project config: %w", err)
+		}
+		projectCfg, err = config.LoadOrDefault(projectPath)
+		if err != nil {
+			return nil, fmt.Errorf("project config: %w", err)
+		}
+	} else {
+		homePath, err := config.HomeProjectConfigPath(cfg.ProjectRoot)
+		if err != nil {
+			return nil, fmt.Errorf("resolving home project config: %w", err)
+		}
+		projectCfg, err = config.Load(homePath)
+		if errors.Is(err, fs.ErrNotExist) {
+			projectCfg, err = config.LoadOrDefault(config.ProjectConfigPath())
+		}
+		if err != nil {
+			return nil, fmt.Errorf("project config: %w", err)
+		}
+	}
+	cfg = cfg.Merge(projectCfg)
+
+	// Merge flags last so flags win over project config.
+	cfg = cfg.Merge(flagCfg)
 
 	if err = cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)
@@ -293,9 +324,6 @@ func flagsToConfig(cmd *cli.Command) *config.Config {
 	if cmd.IsSet("base-url") {
 		cfg.EmbeddingBaseURL = cmd.String("base-url")
 	}
-	if cmd.IsSet("store-path") {
-		cfg.StorePath = cmd.String("store-path")
-	}
 	if cmd.IsSet("project-root") {
 		cfg.ProjectRoot = cmd.String("project-root")
 	}
@@ -305,8 +333,8 @@ func flagsToConfig(cmd *cli.Command) *config.Config {
 	return cfg
 }
 
-func buildStore(cfg *config.Config, dim int) (store.Store, error) {
-	s, err := store.NewSQLiteStore(cfg.StorePath, cfg.EmbeddingModel, dim)
+func buildStore(storePath string, embeddingModel string, dim int) (store.Store, error) {
+	s, err := store.NewSQLiteStore(storePath, embeddingModel, dim)
 	if err != nil {
 		return nil, fmt.Errorf("opening store: %w", err)
 	}
@@ -338,13 +366,13 @@ func buildExtensionFilter(langConfigs []chunker.LanguageConfig) func(string) boo
 	}
 }
 
-func buildComponents(cfg *config.Config, dim int) (*chunker.Chunker, store.Store, *walker.Walker, error) {
+func buildComponents(cfg *config.Config, storePath string, dim int) (*chunker.Chunker, store.Store, *walker.Walker, error) {
 	allLangs := langs.AllLanguages()
 	c, err := chunker.NewChunker(allLangs, chunker.DefaultConfig())
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("creating chunker: %w", err)
 	}
-	s, err := store.NewSQLiteStore(cfg.StorePath, cfg.EmbeddingModel, dim)
+	s, err := store.NewSQLiteStore(storePath, cfg.EmbeddingModel, dim)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("opening store: %w", err)
 	}

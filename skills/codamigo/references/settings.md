@@ -21,7 +21,6 @@ Merge order (later wins): built-in defaults → global file → project file →
 | `embedding_rate_burst` | int | — | Max burst above sustained rate |
 | `include_patterns` | []string | [] | Glob patterns to include; empty = include all |
 | `exclude_patterns` | []string | [] | Additional gitignore-style exclude rules |
-| `store_path` | string | `.codamigo/store.db` | SQLite store location |
 | `index_concurrency` | int | 20 | Files indexed in parallel |
 | `max_file_size` | int | 0 | Skip files larger than N bytes; 0 = no limit |
 
@@ -34,7 +33,6 @@ Changing `embedding_model` or `embedding_dimensions` requires `codamigo reset` t
 | `CODAMIGO_API_KEY` | Embedding API key |
 | `CODAMIGO_MODEL` | Embedding model name |
 | `CODAMIGO_BASE_URL` | Embedding API base URL |
-| `CODAMIGO_STORE_PATH` | SQLite store path |
 | `CODAMIGO_DIMENSIONS` | Embedding vector dimensions |
 
 ## Embedding Provider Examples
