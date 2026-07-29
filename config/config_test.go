@@ -237,6 +237,32 @@ func TestDefaults(t *testing.T) {
 	if d.EmbeddingHTTPTimeout != 60*time.Second {
 		t.Errorf("EmbeddingHTTPTimeout = %v, want 60s", d.EmbeddingHTTPTimeout)
 	}
+	if d.StaleRefreshThreshold != 10 {
+		t.Errorf("StaleRefreshThreshold = %d, want 10", d.StaleRefreshThreshold)
+	}
+}
+
+func TestMerge_StaleRefreshThreshold(t *testing.T) {
+	base := config.Defaults()
+
+	// Non-zero overlay overrides the default.
+	got := base.Merge(&config.Config{StaleRefreshThreshold: 25})
+	if got.StaleRefreshThreshold != 25 {
+		t.Errorf("StaleRefreshThreshold = %d, want 25", got.StaleRefreshThreshold)
+	}
+
+	// Zero overlay leaves the base value intact.
+	got = base.Merge(&config.Config{})
+	if got.StaleRefreshThreshold != 10 {
+		t.Errorf("StaleRefreshThreshold = %d, want 10 (default preserved)", got.StaleRefreshThreshold)
+	}
+}
+
+func TestValidate_NegativeStaleRefreshThreshold(t *testing.T) {
+	c := &config.Config{StaleRefreshThreshold: -1}
+	if err := c.Validate(); err == nil {
+		t.Error("expected error for negative StaleRefreshThreshold")
+	}
 }
 
 func TestMerge_SliceNotAliased(t *testing.T) {

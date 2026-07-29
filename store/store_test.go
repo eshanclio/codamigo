@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -116,6 +117,32 @@ func TestNewSQLiteStore_DimMismatch(t *testing.T) {
 	_, err = store.NewSQLiteStore(dbPath, "model-a", 768)
 	if err == nil {
 		t.Fatal("expected error on dimension mismatch, got nil")
+	}
+}
+
+// An index written by an older codamigo must be rejected outright rather than
+// read with a schema the code no longer expects. There is no in-place migration:
+// the fix is to delete the database and re-index. Like the two tests above this
+// needs a real file, because the rejection only happens when an existing
+// database is reopened.
+func TestNewSQLiteStore_SchemaVersionMismatch(t *testing.T) {
+	dbPath := t.TempDir() + "/test.db"
+
+	s, err := store.NewSQLiteStore(dbPath, "model-a", 3)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if err = s.SetMeta(t.Context(), "schema_version", "2"); err != nil {
+		t.Fatalf("SetMeta: %v", err)
+	}
+	s.Close()
+
+	_, err = store.NewSQLiteStore(dbPath, "model-a", 3)
+	if err == nil {
+		t.Fatal("expected error on schema version mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "re-index required") {
+		t.Errorf("error should tell the user to re-index, got: %v", err)
 	}
 }
 
@@ -1280,7 +1307,7 @@ func TestSearch_CombinedFilters(t *testing.T) {
 	}
 }
 
-func TestSQLiteStore_SchemaV2_LanguageInVec(t *testing.T) {
+func TestSQLiteStore_CurrentSchemaVersion(t *testing.T) {
 	dbPath := testDB(t)
 	s, err := store.NewSQLiteStore(dbPath, "test-model", 3)
 	if err != nil {
@@ -1293,8 +1320,8 @@ func TestSQLiteStore_SchemaV2_LanguageInVec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading schema_version: %v", err)
 	}
-	if v != "2" {
-		t.Errorf("schema_version = %q, want %q", v, "2")
+	if v != "3" {
+		t.Errorf("schema_version = %q, want %q", v, "3")
 	}
 }
 
@@ -1666,7 +1693,9 @@ func TestConcurrentReadWrite(t *testing.T) {
 	for range readers {
 		wg.Go(func() {
 			for range iterations {
-				if _, err = s.Search(ctx, store.SearchQuery{
+				// err is declared per goroutine; assigning the outer err would
+				// be a data race between readers.
+				if _, err := s.Search(ctx, store.SearchQuery{
 					Embedding: []float32{1, 0, 0},
 					Text:      "func",
 					Limit:     5,
@@ -1691,5 +1720,39 @@ func TestConcurrentReadWrite(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("deadlock: concurrent read/write did not complete within timeout")
+	}
+}
+
+func TestFileStates(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "test-model", 3)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+	ctx := t.Context()
+
+	// Absent path: omitted from the result.
+	states, err := s.FileStates(ctx, []string{"missing.go"})
+	if err != nil {
+		t.Fatalf("FileStates not-found: %v", err)
+	}
+	if len(states) != 0 {
+		t.Errorf("expected no states for absent path, got %v", states)
+	}
+
+	// Write a file record carrying mtime + size.
+	if err = s.ReplaceByFiles(ctx, []store.FileRecords{
+		{FilePath: "main.go", FileHash: "abc123", Mtime: 1700000000, Size: 4096},
+	}); err != nil {
+		t.Fatalf("ReplaceByFiles: %v", err)
+	}
+
+	states, err = s.FileStates(ctx, []string{"main.go"})
+	if err != nil {
+		t.Fatalf("FileStates: %v", err)
+	}
+	got := states["main.go"]
+	if got.ContentHash != "abc123" || got.Mtime != 1700000000 || got.Size != 4096 {
+		t.Errorf("FileStates = %+v, want {abc123 1700000000 4096}", got)
 	}
 }

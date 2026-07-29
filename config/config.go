@@ -86,6 +86,24 @@ type Config struct {
 	// NonCodeLanguages lists language names excluded from the map when
 	// CodeOnly is true. Defaults to ["markdown", "yaml", "json"].
 	NonCodeLanguages []string `yaml:"non_code_languages"`
+	// StaleRefreshThreshold caps how many stale result files the MCP search
+	// tool re-indexes in place per query before falling back to flagging the
+	// remainder as stale. 0 means use the default (10).
+	StaleRefreshThreshold int `yaml:"stale_refresh_threshold"`
+	// EnableGraph controls code-graph extraction and the caller/callee/impact
+	// tools. Enabled by default: edges come from the parse chunking already
+	// performs, so they cost only an extra AST walk. Set enable_graph: false to
+	// stop writing the edge tables and hide the graph tools.
+	//
+	// Declared as a pointer because [Config.Merge] treats zero values as "not
+	// set"; a plain bool could never be overridden from true to false.
+	EnableGraph *bool `yaml:"-"`
+}
+
+// GraphEnabled reports whether code-graph features are on, treating an unset
+// value as enabled.
+func (c *Config) GraphEnabled() bool {
+	return c.EnableGraph == nil || *c.EnableGraph
 }
 
 // fileConfig is the YAML-deserializable form of Config. Duration fields are
@@ -114,6 +132,8 @@ type fileConfig struct {
 	MaxFileSize             *int64   `yaml:"max_file_size,omitempty"`
 	WriteBatchSize          int      `yaml:"write_batch_size"`
 	NonCodeLanguages        []string `yaml:"non_code_languages"`
+	StaleRefreshThreshold   int      `yaml:"stale_refresh_threshold"`
+	EnableGraph             *bool    `yaml:"enable_graph,omitempty"`
 }
 
 // maxFileSizeFromYAML converts the optional YAML pointer to an int64 for Config.
@@ -182,6 +202,8 @@ func (fc *fileConfig) toConfig() (*Config, error) {
 		MaxFileSize:             maxFileSizeFromYAML(fc.MaxFileSize),
 		WriteBatchSize:          fc.WriteBatchSize,
 		NonCodeLanguages:        fc.NonCodeLanguages,
+		StaleRefreshThreshold:   fc.StaleRefreshThreshold,
+		EnableGraph:             fc.EnableGraph,
 	}, nil
 }
 
@@ -206,8 +228,14 @@ func Defaults() *Config {
 		MaxFileSize:             1_048_576, // 1 MB
 		WriteBatchSize:          50,
 		NonCodeLanguages:        []string{"markdown", "yaml", "json"},
+		StaleRefreshThreshold:   10,
+		EnableGraph:             ptrTo(true),
 	}
 }
+
+// ptrTo returns a pointer to v, for config fields that must distinguish "unset"
+// from a zero value.
+func ptrTo[T any](v T) *T { return &v }
 
 // GlobalConfigPath returns the path to the user-global config file.
 // Honours XDG_CONFIG_HOME when set; falls back to ~/.codamigo/global_settings.yml.
@@ -384,8 +412,15 @@ func (c *Config) Merge(o *Config) *Config {
 	if o.WriteBatchSize != 0 {
 		out.WriteBatchSize = o.WriteBatchSize
 	}
+	if o.StaleRefreshThreshold != 0 {
+		out.StaleRefreshThreshold = o.StaleRefreshThreshold
+	}
 	if o.NonCodeLanguages != nil {
 		out.NonCodeLanguages = slices.Clone(o.NonCodeLanguages)
+	}
+	// A non-nil pointer is an explicit choice, so false overrides true.
+	if o.EnableGraph != nil {
+		out.EnableGraph = ptrTo(*o.EnableGraph)
 	}
 	return &out
 }
@@ -413,6 +448,9 @@ func (c *Config) Validate() error {
 	}
 	if c.WriteBatchSize < 0 {
 		errs = append(errs, errors.New("WriteBatchSize must not be negative"))
+	}
+	if c.StaleRefreshThreshold < 0 {
+		errs = append(errs, errors.New("StaleRefreshThreshold must not be negative"))
 	}
 	if c.PollInterval < 0 {
 		errs = append(errs, errors.New("PollInterval must not be negative"))

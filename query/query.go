@@ -43,6 +43,10 @@ type Result struct {
 	StartLine int
 	EndLine   int
 	Score     float32
+	// Stale is true when the result's source file changed on disk since it was
+	// indexed and could not be transparently refreshed. The snippet may be
+	// outdated; the agent should read the file to confirm.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // SearchResults wraps a slice of results with a truncation flag indicating
@@ -75,13 +79,15 @@ type MapOptions struct {
 }
 
 // mapCache implements a lock-free read / mutex-protected rebuild cache.
-// Reads atomically load generation and cached pointer with no locking.
+// Reads atomically load the cached pointer with no locking.
 // Rebuilds acquire mu to serialize and double-check the generation, preventing
 // stampede when multiple goroutines see a stale cache simultaneously.
+//
+// The generation counter lives on Querier because it is shared with
+// symbolCache: one bump invalidates every cache derived from the store.
 type mapCache struct {
-	generation atomic.Uint64
-	cached     atomic.Pointer[cachedMap]
-	mu         sync.Mutex
+	cached atomic.Pointer[cachedMap]
+	mu     sync.Mutex
 }
 
 // cachedMap is the value stored by mapCache. gen must equal the generation
@@ -96,7 +102,11 @@ type Querier struct {
 	embedder embedder.Embedder
 	store    store.Store
 	cache    *lru.Cache[string, []float32]
-	mc       mapCache
+	// generation is bumped by InvalidateMapCache after indexing and gates every
+	// store-derived cache below.
+	generation atomic.Uint64
+	mc         mapCache
+	sc         symbolCache
 }
 
 // New constructs a Querier backed by the given embedder and store.
@@ -169,14 +179,24 @@ func (q *Querier) SearchWithOptions(ctx context.Context, text string, opts Searc
 	}
 
 	if opts.MaxTokens > 0 {
-		return truncateResults(out, opts.MaxTokens), nil
+		return Truncate(out, opts.MaxTokens), nil
 	}
 	return SearchResults{Results: out, Truncated: false}, nil
 }
 
-// truncateResults keeps results that fit within the token budget (1 token ~= 4 chars).
-// The first result is always included regardless of budget.
-func truncateResults(results []Result, maxTokens int) SearchResults {
+// StoredFileStates returns the per-file state (content hash, mtime, size)
+// recorded at index time for each of the given file paths. Paths absent from
+// the index are omitted from the map. Callers use it to detect results whose
+// on-disk content has changed since indexing.
+func (q *Querier) StoredFileStates(ctx context.Context, paths []string) (map[string]store.FileState, error) {
+	return q.store.FileStates(ctx, paths)
+}
+
+// Truncate keeps results that fit within the token budget (1 token ~= 4 chars).
+// The first result is always included regardless of budget. It is exported so
+// callers that post-process results (e.g. staleness reconciliation) can apply
+// the token budget as the final step.
+func Truncate(results []Result, maxTokens int) SearchResults {
 	if len(results) == 0 {
 		return SearchResults{Results: results, Truncated: false}
 	}
@@ -209,9 +229,10 @@ func PackageFromPath(projectRoot, filePath string) string {
 }
 
 // InvalidateMapCache bumps the generation counter so the next Map call
-// rebuilds the cached output from the store.
+// rebuilds the cached output from the store. The same counter gates the symbol
+// index used for graph traversal, so one call invalidates both.
 func (q *Querier) InvalidateMapCache() {
-	q.mc.generation.Add(1)
+	q.generation.Add(1)
 }
 
 // Map generates a token-budget-aware repository map by listing all named
@@ -221,7 +242,7 @@ func (q *Querier) InvalidateMapCache() {
 // content to force a rebuild. The cache stores unfiltered data; all
 // [MapOptions] filtering is applied at render time.
 func (q *Querier) Map(ctx context.Context, opts MapOptions) (string, error) {
-	gen := q.mc.generation.Load()
+	gen := q.generation.Load()
 	if c := q.mc.cached.Load(); c != nil && c.gen == gen {
 		return renderMap(c.packages, opts), nil
 	}
@@ -230,7 +251,7 @@ func (q *Querier) Map(ctx context.Context, opts MapOptions) (string, error) {
 	defer q.mc.mu.Unlock()
 
 	// Double-check after acquiring lock.
-	gen = q.mc.generation.Load()
+	gen = q.generation.Load()
 	if c := q.mc.cached.Load(); c != nil && c.gen == gen {
 		return renderMap(c.packages, opts), nil
 	}

@@ -77,6 +77,9 @@ func main() {
 			indexCmd(),
 			searchCmd(),
 			mapCmd(),
+			callersCmd(),
+			calleesCmd(),
+			impactCmd(),
 			serveCmd(),
 			resetCmd(),
 			doctorCmd(),
@@ -129,7 +132,12 @@ func indexCmd() *cli.Command {
 				progress = reporter
 			}
 
-			idx := indexer.New(c, emb, s, w, cfg.IndexConcurrency, cfg.MaxFileSize, cfg.WriteBatchSize, nil, progress)
+			idx := indexer.New(c, emb, s, w,
+				indexer.WithConcurrency(cfg.IndexConcurrency),
+				indexer.WithMaxFileSize(cfg.MaxFileSize),
+				indexer.WithWriteBatchSize(cfg.WriteBatchSize),
+				indexer.WithProgress(progress),
+				indexer.WithGraph(cfg.GraphEnabled()))
 
 			printFailedFiles := func() {
 				if reporter == nil {
@@ -212,13 +220,21 @@ func serveCmd() *cli.Command {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
 			q := query.New(queryEmb, s)
-			idx := indexer.New(c, indexEmb, s, w, cfg.IndexConcurrency, cfg.MaxFileSize, cfg.WriteBatchSize, q.InvalidateMapCache, nil)
+			idx := indexer.New(c, indexEmb, s, w,
+				indexer.WithConcurrency(cfg.IndexConcurrency),
+				indexer.WithMaxFileSize(cfg.MaxFileSize),
+				indexer.WithWriteBatchSize(cfg.WriteBatchSize),
+				indexer.WithOnIndexed(q.InvalidateMapCache),
+				indexer.WithGraph(cfg.GraphEnabled()))
 			wch, err := watcher.New(cfg, w.Match, w.FS())
 			if err != nil {
 				return fmt.Errorf("creating watcher: %w", err)
 			}
 			defer wch.Close()
-			srv := mcp.NewServer(q, idx, wch, cfg.NonCodeLanguages)
+			srv := mcp.NewServer(q, idx, wch,
+				mcp.WithNonCodeLanguages(cfg.NonCodeLanguages),
+				mcp.WithGraph(cfg.GraphEnabled()),
+				mcp.WithStaleRefreshThreshold(cfg.StaleRefreshThreshold))
 			return srv.Serve(ctx)
 		},
 	}

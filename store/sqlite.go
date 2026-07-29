@@ -23,7 +23,7 @@ func init() {
 	sqlite_vec.Auto()
 }
 
-const schemaVersion = "2"
+const schemaVersion = "3"
 
 type sqliteStore struct {
 	reader       *sql.DB
@@ -130,7 +130,9 @@ func (s *sqliteStore) createSchema(ctx context.Context, embeddingModel string, e
 		`CREATE TABLE files (
 			path         TEXT PRIMARY KEY,
 			content_hash TEXT NOT NULL,
-			indexed_at   INTEGER NOT NULL
+			indexed_at   INTEGER NOT NULL,
+			mtime        INTEGER NOT NULL DEFAULT 0,
+			size         INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE chunks (
 			id           TEXT PRIMARY KEY,
@@ -147,6 +149,8 @@ func (s *sqliteStore) createSchema(ctx context.Context, embeddingModel string, e
 		`CREATE INDEX idx_chunks_file_path ON chunks(file_path)`,
 		`CREATE INDEX idx_chunks_content_hash ON chunks(content_hash)`,
 		`CREATE INDEX idx_chunks_language ON chunks(language)`,
+		// Resolving an edge target to a definition looks chunks up by name.
+		`CREATE INDEX idx_chunks_name ON chunks(name)`,
 		fmt.Sprintf(`CREATE VIRTUAL TABLE vec_chunks USING vec0(
 			id TEXT PRIMARY KEY,
 			language TEXT,
@@ -159,6 +163,29 @@ func (s *sqliteStore) createSchema(ctx context.Context, embeddingModel string, e
 			parent,
 			tokenize='unicode61'
 		)`,
+		// Edges and imports are keyed by file_path as well as src_id so a
+		// file's graph can be replaced wholesale alongside its chunks: chunk
+		// IDs are content-derived and therefore change on every edit, which
+		// makes src_id alone unusable for cleanup.
+		`CREATE TABLE edges (
+			src_id        TEXT NOT NULL,
+			file_path     TEXT NOT NULL,
+			src_name      TEXT NOT NULL DEFAULT '',
+			kind          TEXT NOT NULL,
+			dst_name      TEXT NOT NULL,
+			dst_qualifier TEXT NOT NULL DEFAULT '',
+			line          INTEGER NOT NULL
+		)`,
+		`CREATE INDEX idx_edges_src ON edges(src_id)`,
+		`CREATE INDEX idx_edges_dst ON edges(dst_name)`,
+		`CREATE INDEX idx_edges_file ON edges(file_path)`,
+		`CREATE TABLE file_imports (
+			file_path TEXT NOT NULL,
+			module    TEXT NOT NULL,
+			alias     TEXT NOT NULL DEFAULT '',
+			line      INTEGER NOT NULL
+		)`,
+		`CREATE INDEX idx_file_imports_path ON file_imports(file_path)`,
 	}
 
 	tx, err := s.writer.BeginTx(ctx, nil)
@@ -469,11 +496,27 @@ func (s *sqliteStore) DeleteByFile(ctx context.Context, filePath string) error {
 		return fmt.Errorf("deleting chunks for file %q: %w", filePath, err)
 	}
 
+	if err = deleteGraphForFile(ctx, tx, filePath); err != nil {
+		return err
+	}
+
 	if _, err = tx.ExecContext(ctx, "DELETE FROM files WHERE path = ?", filePath); err != nil {
 		return fmt.Errorf("deleting file record %q: %w", filePath, err)
 	}
 
 	return tx.Commit()
+}
+
+// deleteGraphForFile removes a file's edges and imports. Both are file-scoped,
+// so they are replaced wholesale rather than diffed per chunk.
+func deleteGraphForFile(ctx context.Context, tx *sql.Tx, filePath string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM edges WHERE file_path = ?", filePath); err != nil {
+		return fmt.Errorf("deleting edges for file %q: %w", filePath, err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM file_imports WHERE file_path = ?", filePath); err != nil {
+		return fmt.Errorf("deleting imports for file %q: %w", filePath, err)
+	}
+	return nil
 }
 
 func (s *sqliteStore) ReplaceByFiles(ctx context.Context, entries []FileRecords) error {
@@ -528,6 +571,20 @@ func (s *sqliteStore) ReplaceByFiles(ctx context.Context, entries []FileRecords)
 	}
 	defer ftsStmt.Close()
 
+	edgeStmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO edges (src_id, file_path, src_name, kind, dst_name, dst_qualifier, line) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("preparing edges insert: %w", err)
+	}
+	defer edgeStmt.Close()
+
+	importStmt, err := tx.PrepareContext(ctx,
+		`INSERT INTO file_imports (file_path, module, alias, line) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("preparing imports insert: %w", err)
+	}
+	defer importStmt.Close()
+
 	for _, entry := range entries {
 		rows, err := tx.QueryContext(ctx, "SELECT id FROM chunks WHERE file_path = ?", entry.FilePath)
 		if err != nil {
@@ -561,6 +618,10 @@ func (s *sqliteStore) ReplaceByFiles(ctx context.Context, entries []FileRecords)
 			return fmt.Errorf("deleting chunks for file %q: %w", entry.FilePath, err)
 		}
 
+		if err = deleteGraphForFile(ctx, tx, entry.FilePath); err != nil {
+			return err
+		}
+
 		for _, r := range entry.Records {
 			if _, err = chunkStmt.ExecContext(ctx, r.ID, r.FilePath, r.Language, r.Content, r.ContentHash, r.NodeKind, r.Name, r.Parent, r.StartLine, r.EndLine); err != nil {
 				return fmt.Errorf("inserting chunk %q: %w", r.ID, err)
@@ -586,8 +647,20 @@ func (s *sqliteStore) ReplaceByFiles(ctx context.Context, entries []FileRecords)
 			}
 		}
 
-		if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO files (path, content_hash, indexed_at) VALUES (?, ?, ?)",
-			entry.FilePath, entry.FileHash, time.Now().Unix()); err != nil {
+		for _, e := range entry.Edges {
+			if _, err = edgeStmt.ExecContext(ctx, e.SrcID, entry.FilePath, e.SrcName, e.Kind, e.DstName, e.DstQualifier, e.Line); err != nil {
+				return fmt.Errorf("inserting edge %s->%s for %q: %w", e.SrcID, e.DstName, entry.FilePath, err)
+			}
+		}
+
+		for _, im := range entry.Imports {
+			if _, err = importStmt.ExecContext(ctx, entry.FilePath, im.Module, im.Alias, im.Line); err != nil {
+				return fmt.Errorf("inserting import %q for %q: %w", im.Module, entry.FilePath, err)
+			}
+		}
+
+		if _, err = tx.ExecContext(ctx, "INSERT OR REPLACE INTO files (path, content_hash, indexed_at, mtime, size) VALUES (?, ?, ?, ?, ?)",
+			entry.FilePath, entry.FileHash, time.Now().Unix(), entry.Mtime, entry.Size); err != nil {
 			return fmt.Errorf("setting file hash for %q: %w", entry.FilePath, err)
 		}
 	}
@@ -941,6 +1014,49 @@ func (s *sqliteStore) FileHashes(ctx context.Context, filePaths []string) (map[s
 	return result, nil
 }
 
+func (s *sqliteStore) FileStates(ctx context.Context, filePaths []string) (map[string]FileState, error) {
+	if len(filePaths) == 0 {
+		return make(map[string]FileState), nil
+	}
+
+	result := make(map[string]FileState, len(filePaths))
+
+	const batchSize = 500
+	for start := 0; start < len(filePaths); start += batchSize {
+		end := min(start+batchSize, len(filePaths))
+		batch := filePaths[start:end]
+
+		ph := placeholders(len(batch))
+		args := make([]any, len(batch))
+		for i, p := range batch {
+			args[i] = p
+		}
+
+		rows, err := s.reader.QueryContext(ctx,
+			"SELECT path, content_hash, mtime, size FROM files WHERE path IN ("+ph+")", args...)
+		if err != nil {
+			return nil, fmt.Errorf("querying file states: %w", err)
+		}
+
+		for rows.Next() {
+			var path string
+			var st FileState
+			if err = rows.Scan(&path, &st.ContentHash, &st.Mtime, &st.Size); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scanning file state: %w", err)
+			}
+			result[path] = st
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterating file states: %w", err)
+		}
+		rows.Close()
+	}
+
+	return result, nil
+}
+
 func (s *sqliteStore) ChunkHashesByFile(ctx context.Context, filePath string) (map[string]string, error) {
 	rows, err := s.reader.QueryContext(ctx, "SELECT id, content_hash FROM chunks WHERE file_path = ?", filePath)
 	if err != nil {
@@ -1119,7 +1235,7 @@ func (s *sqliteStore) ListSymbols(ctx context.Context) ([]Symbol, error) {
 	}
 
 	rows, err := s.reader.QueryContext(ctx,
-		"SELECT file_path, name, node_kind, parent, start_line, end_line, language FROM chunks WHERE name != '' ORDER BY file_path, start_line")
+		"SELECT id, file_path, name, node_kind, parent, start_line, end_line, language FROM chunks WHERE name != '' ORDER BY file_path, start_line")
 	if err != nil {
 		return nil, fmt.Errorf("listing symbols: %w", err)
 	}
@@ -1128,7 +1244,7 @@ func (s *sqliteStore) ListSymbols(ctx context.Context) ([]Symbol, error) {
 	symbols := make([]Symbol, 0, count)
 	for rows.Next() {
 		var sym Symbol
-		if err = rows.Scan(&sym.FilePath, &sym.Name, &sym.NodeKind, &sym.Parent, &sym.StartLine, &sym.EndLine, &sym.Language); err != nil {
+		if err = rows.Scan(&sym.ID, &sym.FilePath, &sym.Name, &sym.NodeKind, &sym.Parent, &sym.StartLine, &sym.EndLine, &sym.Language); err != nil {
 			return nil, fmt.Errorf("scanning symbol: %w", err)
 		}
 		symbols = append(symbols, sym)
