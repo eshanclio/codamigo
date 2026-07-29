@@ -7,10 +7,10 @@ require (
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/hashicorp/golang-lru/v2 v2.0.7
-	github.com/ieshan/go-code-chunker v0.0.1
+	github.com/ieshan/go-code-chunker v0.0.2
 	github.com/ieshan/go-embedder v0.0.3
-	github.com/mattn/go-sqlite3 v1.14.47
-	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/mattn/go-sqlite3 v1.14.49
+	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/urfave/cli/v3 v3.10.1
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/sync v0.22.0
@@ -20,7 +20,7 @@ require (
 
 require (
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260720091822-7cc6674724ac // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
@@ -30,7 +30,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-pointer v0.0.1 // indirect
-	github.com/mattn/go-runewidth v0.0.24 // indirect
+	github.com/mattn/go-runewidth v0.0.27 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
