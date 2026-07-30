@@ -79,6 +79,45 @@ func TestNew(t *testing.T) {
 	}
 }
 
+// Options cannot express "required", so these dependencies are guarded at
+// construction. The panic is deliberate per AGENTS.md: a nil dependency is a
+// programmer error, not user input.
+func TestNew_NilDependencies(t *testing.T) {
+	dim := 3
+	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	root := t.TempDir()
+	w, err := walker.New(root, &config.Config{ProjectRoot: root})
+	if err != nil {
+		t.Fatalf("walker.New: %v", err)
+	}
+	defer w.Close() //nolint:errcheck
+
+	emb := &fakeEmbedder{dim: dim}
+
+	for _, tc := range []struct {
+		name string
+		call func()
+	}{
+		{"embedder", func() { indexer.New(nil, nil, s, w) }},
+		{"store", func() { indexer.New(nil, emb, nil, w) }},
+		{"walker", func() { indexer.New(nil, emb, s, nil) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("indexer.New should panic on a nil %s", tc.name)
+				}
+			}()
+			tc.call()
+		})
+	}
+}
+
 // The onIndexed hook is how serve keeps its query-side caches (the repo map and
 // the graph's symbol index) in step with the store, so a silent break here means
 // stale answers rather than a visible failure.
