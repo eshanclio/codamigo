@@ -109,8 +109,17 @@ type Querier struct {
 	sc         symbolCache
 }
 
-// New constructs a Querier backed by the given embedder and store.
+// New constructs a Querier backed by the given embedder and store. Both are
+// required; passing nil panics, because a Querier cannot answer anything
+// without them and the alternative is a nil dereference on the first query,
+// far from the mistake.
 func New(e embedder.Embedder, s store.Store) *Querier {
+	if e == nil {
+		panic("query.New: embedder must not be nil")
+	}
+	if s == nil {
+		panic("query.New: store must not be nil")
+	}
 	cache, err := lru.New[string, []float32](64)
 	if err != nil {
 		panic(fmt.Sprintf("query: creating LRU cache: %v", err))

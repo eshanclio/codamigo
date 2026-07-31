@@ -40,6 +40,33 @@ func (f *fakeEmbedder) EmbedBatchPartial(ctx context.Context, texts []string) ([
 
 func (f *fakeEmbedder) Dim() int { return len(f.vec) }
 
+// Both dependencies are required, and the guard exists so the mistake surfaces
+// at the construction site rather than as a nil dereference on the first query.
+func TestNew_NilDependencies(t *testing.T) {
+	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "test-model", 3)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	for _, tc := range []struct {
+		name string
+		call func()
+	}{
+		{"embedder", func() { query.New(nil, s) }},
+		{"store", func() { query.New(&fakeEmbedder{vec: []float32{1, 0, 0}}, nil) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("query.New should panic on a nil %s", tc.name)
+				}
+			}()
+			tc.call()
+		})
+	}
+}
+
 func TestQuerier_Search(t *testing.T) {
 	dim := 3
 	dbPath := t.TempDir() + "/test.db"

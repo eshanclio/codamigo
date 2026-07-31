@@ -65,6 +65,7 @@ config              store
 - **`store` never imports `go-code-chunker/chunker`.** Map `chunker.Chunk` → `store.Record` in `indexer`.
 - **Config passed at construction time.** No package reads global config state.
 - **Required dependencies are positional; everything with a default is an `Option`.** `indexer.New` and `mcp.NewServer` take only what the type cannot work without, then `...Option`. A new knob is a `WithXxx` function, never a new parameter — that way adding one does not touch a single existing call site, and call sites stay readable instead of a run of bare ints and nils.
+- **Constructors reject nil required dependencies at construction, not first use.** Go cannot express "required" in a type, so `indexer.New` and `query.New` panic immediately with `<pkg>.New: <dep> must not be nil`. Every guard has a test. Constructors that do I/O (`walker.New`, `watcher.New`, `store.NewSQLiteStore`) return an error instead; `mcp.NewServer`'s dependencies are all genuinely optional and it degrades gracefully.
 - **No packages named `util`, `common`, `helpers`, or `shared`.** Use a domain name.
 - **Indexer must not buffer paths.** Feed directly from `walker.Walk(ctx)` into the errgroup — never collect into `[]string` first.
 - **Do not create git worktrees or commit unless explicitly asked.**
