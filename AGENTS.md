@@ -41,7 +41,7 @@ config              store
                         ▼
               github.com/ieshan/go-code-chunker
                 ├── chunker/  (cAST algorithm)
-                └── langs/    (language configs, CGo)
+                └── langs/    (language configs + edge rules, CGo)
               github.com/ieshan/go-embedder
                 ├── embedder/ (Embedder interface)
                 └── openai/   (OpenAI-compatible client)
@@ -50,12 +50,12 @@ config              store
 - `github.com/ieshan/go-code-chunker` — external module providing `chunker/` (cAST algorithm) and `langs/` (per-language configs with CGo grammars); imported only by `cmd/codamigo`
 - `github.com/ieshan/go-embedder` — external module providing `embedder.Embedder` interface and `openai.Client` implementation; imported by `indexer`, `query`, and `cmd/codamigo`
 - `config/` — `Config` struct; no internal imports
-- `store/` — `Store` interface + sqlite-vec; never imports `go-code-chunker/chunker`
+- `store/` — `Store` interface + sqlite-vec; also owns the code-graph tables (`edges`, `file_imports`); never imports `go-code-chunker/chunker`
 - `walker/` — recursive FS walk + gitignore + include/exclude filtering
 - `watcher/` — fsnotify + poll watcher implementations
-- `indexer/` — walk → chunk → embed → store pipeline
-- `query/` — embed query, hybrid KNN + BM25 search, repo map
-- `mcp/` — MCP stdio server; `search` and `get_map` tools
+- `indexer/` — walk → chunk → embed → store pipeline; maps `chunker.Edge` → `store.Edge`/`store.Import`
+- `query/` — embed query, hybrid KNN + BM25 search, repo map, code-graph traversal (`Callers`/`Callees`/`Impact`) with query-time target resolution
+- `mcp/` — MCP stdio server; `search`, `get_map`, `get_callers`, `get_callees`, `get_impact` tools
 - `cmd/codamigo/` — CLI entry point; only place that imports `go-code-chunker/langs`
 
 ## Architectural rules
@@ -64,6 +64,7 @@ config              store
 - **`go-code-chunker/langs` only imported by `cmd/`.** Inject `*chunker.Chunker` everywhere else.
 - **`store` never imports `go-code-chunker/chunker`.** Map `chunker.Chunk` → `store.Record` in `indexer`.
 - **Config passed at construction time.** No package reads global config state.
+- **Required dependencies are positional; everything with a default is an `Option`.** `indexer.New` and `mcp.NewServer` take only what the type cannot work without, then `...Option`. A new knob is a `WithXxx` function, never a new parameter — that way adding one does not touch a single existing call site, and call sites stay readable instead of a run of bare ints and nils.
 - **No packages named `util`, `common`, `helpers`, or `shared`.** Use a domain name.
 - **Indexer must not buffer paths.** Feed directly from `walker.Walk(ctx)` into the errgroup — never collect into `[]string` first.
 - **Do not create git worktrees or commit unless explicitly asked.**

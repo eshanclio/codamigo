@@ -55,20 +55,76 @@ type Indexer struct {
 	writeBatchSize int
 	onIndexed      func()
 	progress       Progress
+	enableGraph    bool
 }
 
-// New constructs an Indexer from its dependencies.
+// Option customises an Indexer at construction time.
+//
+// Everything with a sensible default is an Option; only the dependencies an
+// Indexer cannot work without are positional parameters of [New]. That keeps
+// adding a knob from breaking every existing caller, and keeps call sites
+// self-describing instead of a run of bare ints and nils.
+type Option func(*Indexer)
+
+// WithGraph enables or disables graph edge extraction. Enabled by default:
+// edges come from the parse chunking already performs, so extracting them costs
+// only an extra AST walk. Disable it to stop writing the edge tables entirely.
+func WithGraph(enabled bool) Option {
+	return func(idx *Indexer) { idx.enableGraph = enabled }
+}
+
+// WithConcurrency sets the maximum number of files processed in parallel.
+// Non-positive values leave the default of 1 in effect.
+func WithConcurrency(n int) Option {
+	return func(idx *Indexer) {
+		if n > 0 {
+			idx.concurrency = n
+		}
+	}
+}
+
+// WithMaxFileSize skips files larger than n bytes. Non-positive values leave the
+// default in effect, which is no limit.
+func WithMaxFileSize(n int64) Option {
+	return func(idx *Indexer) {
+		if n > 0 {
+			idx.maxFileSize = n
+		}
+	}
+}
+
+// WithWriteBatchSize sets how many FileRecords entries are written per store
+// call. Non-positive values leave the default of 50 in effect.
+func WithWriteBatchSize(n int) Option {
+	return func(idx *Indexer) {
+		if n > 0 {
+			idx.writeBatchSize = n
+		}
+	}
+}
+
+// WithOnIndexed registers a callback invoked after each successful write batch,
+// used to invalidate caches derived from the index.
+func WithOnIndexed(fn func()) Option {
+	return func(idx *Indexer) { idx.onIndexed = fn }
+}
+
+// WithProgress registers a receiver for per-file notifications. Without it,
+// indexing reports no progress.
+func WithProgress(p Progress) Option {
+	return func(idx *Indexer) { idx.progress = p }
+}
+
+// New constructs an Indexer from its required dependencies; everything else is
+// set with an [Option].
+//
 // c may be nil for hash-only indexing (no chunking); when non-nil it must have
 // been built with the desired language configs (from langs.AllLanguages() in cmd/).
 // indexer does not import langs directly.
 // The caller retains ownership of w and must close it separately; the indexer
 // does not close the walker.
-// concurrency controls the maximum number of files processed in parallel;
-// values <= 0 are treated as 1.
-// writeBatchSize controls how many FileRecords entries are written per store
-// call; values <= 0 default to 50.
-// progress is optional; pass nil to disable per-file notifications.
-func New(c *chunker.Chunker, e embedder.Embedder, s store.Store, w *walker.Walker, concurrency int, maxFileSize int64, writeBatchSize int, onIndexed func(), progress Progress) *Indexer {
+// Graph edge extraction is on by default; pass WithGraph(false) to disable it.
+func New(c *chunker.Chunker, e embedder.Embedder, s store.Store, w *walker.Walker, opts ...Option) *Indexer {
 	if e == nil {
 		panic("indexer.New: embedder must not be nil")
 	}
@@ -78,24 +134,20 @@ func New(c *chunker.Chunker, e embedder.Embedder, s store.Store, w *walker.Walke
 	if w == nil {
 		panic("indexer.New: walker must not be nil")
 	}
-	if concurrency <= 0 {
-		concurrency = 1
-	}
-	if writeBatchSize <= 0 {
-		writeBatchSize = 50
-	}
-	return &Indexer{
+	idx := &Indexer{
 		chunker:        c,
 		embedder:       e,
 		store:          s,
 		walker:         w,
 		fsys:           w.FS(),
-		concurrency:    concurrency,
-		maxFileSize:    maxFileSize,
-		writeBatchSize: writeBatchSize,
-		onIndexed:      onIndexed,
-		progress:       progress,
+		concurrency:    1,
+		writeBatchSize: 50,
+		enableGraph:    true,
 	}
+	for _, opt := range opts {
+		opt(idx)
+	}
+	return idx
 }
 
 // Index walks the project root, chunks every matched file, embeds each chunk,
@@ -203,6 +255,62 @@ func (idx *Indexer) IndexFiles(ctx context.Context, paths []string) error {
 	return nil
 }
 
+// StaleFiles returns the subset of the given paths whose on-disk content has
+// changed since indexing, using a two-level check for query-time staleness
+// detection:
+//
+//   - Fast path: if a file's current (mtime, size) matches its stored state,
+//     it is treated as unchanged without reading the file.
+//   - Confirm: otherwise the file is read and its content hash compared against
+//     the stored hash, so a mere touch (mtime bump, same bytes) is not counted
+//     as stale.
+//
+// A file missing or unreadable on disk is reported stale (its stored chunks
+// should be pruned on re-index). A file with no stored state is confirmed by
+// hash against an empty stored hash, so it reads as stale. Files exceeding
+// maxFileSize are treated as unchanged (they are never indexed). It never
+// chunks or embeds.
+func (idx *Indexer) StaleFiles(ctx context.Context, paths []string, stored map[string]store.FileState) (map[string]struct{}, error) {
+	stale := make(map[string]struct{})
+	for _, path := range paths {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		relPath, err := filepath.Rel(idx.walker.Root(), path)
+		if err != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+			continue
+		}
+
+		info, err := fs.Stat(idx.fsys, relPath)
+		if err != nil {
+			// Missing or unreadable on disk: the indexed copy is stale.
+			stale[path] = struct{}{}
+			continue
+		}
+
+		st, ok := stored[path]
+		if ok && st.Mtime == info.ModTime().Unix() && st.Size == info.Size() {
+			// Fast path: unchanged (mtime + size match) — no read needed.
+			continue
+		}
+
+		content, err := fs.ReadFile(idx.fsys, relPath)
+		if err != nil {
+			stale[path] = struct{}{}
+			continue
+		}
+		if idx.maxFileSize > 0 && int64(len(content)) > idx.maxFileSize {
+			continue
+		}
+
+		if st.ContentHash != store.ContentHash(content) {
+			stale[path] = struct{}{}
+		}
+	}
+	return stale, nil
+}
+
 func (idx *Indexer) indexBatch(ctx context.Context, paths []string) error {
 	stageBatchSize := idx.concurrency * 4
 	for batch := range slices.Chunk(paths, stageBatchSize) {
@@ -221,6 +329,8 @@ type fileInfo struct {
 	relPath string
 	content []byte
 	hash    string
+	mtime   int64
+	size    int64
 }
 
 type embedOrigin struct {
@@ -246,6 +356,11 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 				return nil
 			}
 
+			info, err := fs.Stat(idx.fsys, relPath)
+			if err != nil {
+				return fmt.Errorf("stat file %s: %w", path, err)
+			}
+
 			content, err := fs.ReadFile(idx.fsys, relPath)
 			if err != nil {
 				return fmt.Errorf("reading file %s: %w", path, err)
@@ -267,6 +382,8 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 				relPath: relPath,
 				content: content,
 				hash:    store.ContentHash(content),
+				mtime:   info.ModTime().Unix(),
+				size:    info.Size(),
 			}
 			return nil
 		})
@@ -311,7 +428,8 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 	type chunkedFile struct {
 		info         fileInfo
 		chunks       []chunker.Chunk
-		skipProgress bool // true when FileSkipped was already reported (e.g. unsupported language)
+		edges        []chunker.Edge // graph edges from the same parse; nil when graph is disabled
+		skipProgress bool           // true when FileSkipped was already reported (e.g. unsupported language)
 	}
 	chunked := make([]chunkedFile, len(changed))
 
@@ -324,7 +442,9 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 				chunked[i] = chunkedFile{info: fi}
 				return nil
 			}
-			chunks, err := idx.chunker.ChunkFile(fi.path, fi.content)
+			// Analyze returns chunks and edges from one parse, so the graph
+			// costs an extra AST walk rather than a second parse.
+			res, err := idx.chunker.Analyze(fi.path, fi.content)
 			if errors.Is(err, chunker.ErrUnsupportedLanguage) {
 				slog.DebugContext(ctx, "skipping unsupported file type", slog.String("path", fi.path))
 				if idx.progress != nil {
@@ -336,7 +456,11 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 			if err != nil {
 				return fmt.Errorf("chunking %s: %w", fi.path, err)
 			}
-			chunked[i] = chunkedFile{info: fi, chunks: chunks}
+			edges := res.Edges
+			if !idx.enableGraph {
+				edges = nil
+			}
+			chunked[i] = chunkedFile{info: fi, chunks: res.Chunks, edges: edges}
 			return nil
 		})
 	}
@@ -471,10 +595,16 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 			}
 		}
 
+		edges, imports := mapEdges(cf.info.path, cf.edges, records)
+
 		entries = append(entries, store.FileRecords{
 			FilePath: cf.info.path,
 			Records:  records,
 			FileHash: cf.info.hash,
+			Mtime:    cf.info.mtime,
+			Size:     cf.info.size,
+			Edges:    edges,
+			Imports:  imports,
 		})
 	}
 

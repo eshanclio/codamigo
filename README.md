@@ -3,16 +3,19 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/ieshan/codamigo.svg)](https://pkg.go.dev/github.com/ieshan/codamigo)
 [![Go Report Card](https://goreportcard.com/badge/github.com/ieshan/codamigo)](https://goreportcard.com/report/github.com/ieshan/codamigo)
 
-Semantic code search for your local machine. codamigo walks a source tree, chunks files into semantically coherent pieces using tree-sitter ASTs, embeds the chunks with a configurable embedding provider, stores them in a local SQLite + sqlite-vec database, and exposes hybrid search (KNN + BM25) via a CLI and an MCP stdio server.
+Semantic code search for your local machine. codamigo walks a source tree, chunks files into semantically coherent pieces using tree-sitter ASTs, embeds the chunks with a configurable embedding provider, stores them in a local SQLite + sqlite-vec database, and exposes hybrid search (KNN + BM25) plus code-graph traversal via a CLI and an MCP stdio server.
 
 ## How it works
 
 codamigo runs a four-stage pipeline:
 
 - **Walk** — recursive filesystem walk with `.gitignore` / `.caignore` and include/exclude glob filtering
-- **Chunk** — tree-sitter AST-based splitting into semantically coherent units (functions, classes, declarations)
+- **Chunk** — tree-sitter AST-based splitting into semantically coherent units (functions, classes, declarations), which also extracts the graph edges between them (calls, imports, inheritance, type references)
 - **Embed** — each chunk is converted to a float32 vector via any OpenAI-compatible embedding API
 - **Search** — queries are embedded and matched against the store using hybrid KNN + BM25 (Reciprocal Rank Fusion), backed by sqlite-vec and FTS5
+
+Alongside search, the extracted graph answers relationship questions — who calls a symbol, what it
+references, and what a change to it would affect — without an embedding call.
 
 The index lives in a single `.codamigo/store.db` file in your project. No external services are required — any local embedding server (Ollama, LM Studio) works.
 
@@ -142,6 +145,32 @@ By default, the map excludes configured non-code files (default: markdown, yaml,
 
 ---
 
+### `codamigo callers <symbol>` / `codamigo callees <symbol>` / `codamigo impact <symbol>`
+
+Traverse the code graph built during indexing. All three read stored edges only — no embedding API
+calls — and print `filepath:line symbol` per result.
+
+```bash
+codamigo callers ReplaceByFiles      # what depends on this symbol
+codamigo callees Index               # what this symbol uses
+codamigo impact Store --depth 2      # blast radius of changing it
+```
+
+| Command | Flag | Default | Purpose |
+|---------|------|---------|---------|
+| all three | `--limit` | `50` | Maximum results to print |
+| `impact` | `--depth` | `2` | Levels of callers to traverse (max 10) |
+
+`callers` and `impact` locate each result at the **reference site**; `callees` locates it at the
+**definition** being referenced. Targets with no definition in the project are marked `(external)`,
+and non-call relationships are marked `(reference)` or `(inherit)`. A definition that references the
+symbol several times is reported once.
+
+Set `enable_graph: false` to skip edge extraction entirely; these commands and their MCP tools are
+then unavailable.
+
+---
+
 ### `codamigo serve`
 
 Starts the MCP stdio server. On startup it runs a full index pass, then launches a background filesystem watcher that re-indexes changed files. Accepts MCP tool calls from an AI assistant over stdin/stdout.
@@ -164,6 +193,22 @@ Starts the MCP stdio server. On startup it runs a full index pass, then launches
 - `code_only` (bool, default `true`) — exclude configured non-code languages from the map
 - `show_summary` (bool, default `true`) — show per-file type summary in file headers
 - `show_visibility` (bool, default `true`) — show export markers (`+` public, `-` internal)
+
+**MCP tool: `get_callers`** — definitions that reference a symbol
+- `symbol` (string) — exact symbol name
+- `limit` (int, default `50`, max `100`) — maximum results
+
+**MCP tool: `get_callees`** — what a symbol references
+- `symbol` (string) — exact symbol name
+- `limit` (int, default `50`, max `100`) — maximum results
+
+**MCP tool: `get_impact`** — symbols transitively affected by changing a symbol
+- `symbol` (string) — exact symbol name
+- `depth` (int, default `2`, max `10`) — levels of callers to traverse
+- `limit` (int, default `50`, max `100`) — maximum results
+
+The three graph tools are annotated read-only and are omitted from `tools/list` when
+`enable_graph: false`.
 
 Uses the same common flags as `index`.
 
@@ -232,6 +277,10 @@ non_code_languages:           # languages excluded by code_only filter
   - markdown                  # default: ["markdown", "yaml", "json"]
   - yaml
   - json
+
+# Code graph
+enable_graph: true                    # extract call/import/inherit/reference edges and
+                                      # expose the callers/callees/impact tools
 
 # Project
 project_root: ""                      # defaults to current working directory

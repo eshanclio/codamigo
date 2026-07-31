@@ -23,6 +23,7 @@ import (
 
 	"github.com/ieshan/codamigo/indexer"
 	"github.com/ieshan/codamigo/query"
+	"github.com/ieshan/codamigo/store"
 	"github.com/ieshan/codamigo/watcher"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -37,25 +38,66 @@ const refreshCooldown = 30 * time.Second
 type indexerIface interface {
 	Index(ctx context.Context) error
 	IndexFiles(ctx context.Context, paths []string) error
+	StaleFiles(ctx context.Context, paths []string, stored map[string]store.FileState) (map[string]struct{}, error)
 }
+
+// defaultStaleRefreshThreshold is used unless [WithStaleRefreshThreshold] sets
+// a positive value. It caps how many stale result files searchWithFreshness
+// re-indexes synchronously (Tier 1); above this count, stale results are
+// flagged rather than refreshed (Tier 2) to bound query-time embedding cost.
+const defaultStaleRefreshThreshold = 10
 
 // Server is the MCP stdio server for codamigo.
 type Server struct {
-	querier          *query.Querier
-	indexer          indexerIface
-	watcher          watcher.Watcher
-	nonCodeLanguages []string
-	indexMu          sync.Mutex
-	lastRefresh      time.Time // guarded by indexMu
+	querier               *query.Querier
+	indexer               indexerIface
+	watcher               watcher.Watcher
+	nonCodeLanguages      []string
+	staleRefreshThreshold int
+	enableGraph           bool
+	indexMu               sync.Mutex
+	lastRefresh           time.Time // guarded by indexMu
+}
+
+// Option customises a Server at construction time.
+//
+// Everything with a sensible default is an Option; only the collaborators the
+// server delegates to are positional parameters of [NewServer]. That keeps
+// adding a knob from breaking every existing caller.
+type Option func(*Server)
+
+// WithGraph enables or disables the code-graph tools (get_callers, get_callees,
+// get_impact). Enabled by default. When disabled the tools are not advertised in
+// tools/list at all, so agents never see a capability the index cannot serve.
+func WithGraph(enabled bool) Option {
+	return func(s *Server) { s.enableGraph = enabled }
+}
+
+// WithStaleRefreshThreshold caps how many stale result files a single search
+// re-indexes in place before flagging the remainder instead. Non-positive
+// values leave [defaultStaleRefreshThreshold] in effect.
+func WithStaleRefreshThreshold(n int) Option {
+	return func(s *Server) {
+		if n > 0 {
+			s.staleRefreshThreshold = n
+		}
+	}
+}
+
+// WithNonCodeLanguages sets the language names excluded from the repo map when
+// the get_map code_only option is true. Without it, nothing is excluded.
+func WithNonCodeLanguages(langs []string) Option {
+	return func(s *Server) { s.nonCodeLanguages = langs }
 }
 
 // NewServer constructs the MCP server.
 // All dependencies are optional (may be nil); the server degrades gracefully.
 // When idx is non-nil, a search request with refresh_index=true triggers a
 // full re-index before querying. When w is non-nil, changed files are
-// re-indexed continuously in the background. nonCodeLangs configures which
-// languages are excluded when the get_map code_only option is true.
-func NewServer(q *query.Querier, idx *indexer.Indexer, w watcher.Watcher, nonCodeLangs []string) *Server {
+// re-indexed continuously in the background.
+// The code-graph tools are advertised by default; pass WithGraph(false) to hide
+// them.
+func NewServer(q *query.Querier, idx *indexer.Indexer, w watcher.Watcher, opts ...Option) *Server {
 	// Guard against the Go interface nil trap: a nil *indexer.Indexer stored in
 	// an interface becomes a non-nil interface value, breaking s.indexer != nil
 	// checks throughout the server. Explicitly nil-out the interface field when
@@ -64,14 +106,24 @@ func NewServer(q *query.Querier, idx *indexer.Indexer, w watcher.Watcher, nonCod
 	if idx != nil {
 		iidx = idx
 	}
-	return NewServerWithIndexer(q, iidx, w, nonCodeLangs)
+	return NewServerWithIndexer(q, iidx, w, opts...)
 }
 
 // NewServerWithIndexer is like [NewServer] but accepts any value that satisfies
 // [indexerIface]. This is useful in tests where a lightweight mock replaces the
 // real [*indexer.Indexer].
-func NewServerWithIndexer(q *query.Querier, idx indexerIface, w watcher.Watcher, nonCodeLangs []string) *Server {
-	return &Server{querier: q, indexer: idx, watcher: w, nonCodeLanguages: nonCodeLangs}
+func NewServerWithIndexer(q *query.Querier, idx indexerIface, w watcher.Watcher, opts ...Option) *Server {
+	s := &Server{
+		querier:               q,
+		indexer:               idx,
+		watcher:               w,
+		staleRefreshThreshold: defaultStaleRefreshThreshold,
+		enableGraph:           true,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Serve runs the MCP stdio loop over os.Stdin and os.Stdout until ctx is
@@ -81,11 +133,21 @@ func (s *Server) Serve(ctx context.Context) error {
 }
 
 // ServeIO runs the MCP stdio loop over the provided streams until ctx is
-// cancelled. It performs an initial full index (if indexer is non-nil),
-// launches a background watcher goroutine (if both watcher and indexer are
-// non-nil), and then blocks on the MCP stdio protocol loop. All goroutines
-// are joined before ServeIO returns.
+// cancelled. See [Server.ServeTransport] for the behaviour; this is the stdio
+// wrapper around it.
 func (s *Server) ServeIO(ctx context.Context, in io.Reader, out io.Writer) error {
+	return s.ServeTransport(ctx, &mcp.IOTransport{
+		Reader: io.NopCloser(in),
+		Writer: nopCloserWriter{out},
+	})
+}
+
+// ServeTransport runs the MCP protocol loop over the given transport until ctx
+// is cancelled. It performs an initial full index (if indexer is non-nil),
+// launches a background watcher goroutine (if both watcher and indexer are
+// non-nil), and then blocks on the protocol loop. All goroutines are joined
+// before it returns.
+func (s *Server) ServeTransport(ctx context.Context, transport mcp.Transport) error {
 	// 1. Initial full index (serialized with watcher via indexMu).
 	if s.indexer != nil {
 		slog.InfoContext(ctx, "mcp: running initial index")
@@ -112,18 +174,41 @@ func (s *Server) ServeIO(ctx context.Context, in io.Reader, out io.Writer) error
 	// 3. Build and run the MCP server with context propagation.
 	srv := mcp.NewServer(&mcp.Implementation{Name: "codamigo", Version: "0.1.0"}, nil)
 	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "search",
-		Description: "Semantic search over the indexed codebase",
+		Name:  "search",
+		Title: "Search code",
+		// search may re-index stale files in place, so it is not annotated
+		// read-only even though it never changes source.
+		Annotations: &mcp.ToolAnnotations{OpenWorldHint: &openWorldFalse},
+		Description: "Semantic search over the indexed codebase. Results are reconciled against the current files on disk: changed files are re-indexed in place when few, otherwise their results carry a \"stale\": true flag meaning the snippet may be outdated and the file should be read to confirm.",
 	}, s.HandleSearch)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_map",
+		Title:       "Get codebase map",
+		Annotations: readOnly(),
 		Description: "Returns a structural map of the codebase showing packages, files, and symbol names. Use this to orient before searching. No API calls needed. By default, excludes configured non-code files and shows line ranges, type summaries, and visibility markers.",
 	}, s.HandleMap)
 
-	transport := &mcp.IOTransport{
-		Reader: io.NopCloser(in),
-		Writer: nopCloserWriter{out},
+	if s.enableGraph {
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "get_callers",
+			Title:       "Get callers of a symbol",
+			Annotations: readOnly(),
+			Description: "Returns the functions and methods that reference a symbol, with their file and line. Use this instead of grepping for a name when you need to know what depends on a symbol. Reads the prebuilt code graph, so it costs no embedding calls.",
+		}, s.HandleGetCallers)
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "get_callees",
+			Title:       "Get callees of a symbol",
+			Annotations: readOnly(),
+			Description: "Returns what a symbol references: the functions it calls, the types it names, and the supertypes it declares. Use this to trace a call chain outward from a symbol. Targets outside the project (third-party packages) are included and marked unresolved.",
+		}, s.HandleGetCallees)
+		mcp.AddTool(srv, &mcp.Tool{
+			Name:        "get_impact",
+			Title:       "Get change impact of a symbol",
+			Annotations: readOnly(),
+			Description: "Returns the symbols transitively affected by changing a symbol — its callers, their callers, and so on. Use this before renaming, changing a signature, or deleting code, to see the blast radius of the change.",
+		}, s.HandleGetImpact)
 	}
+
 	err := srv.Run(ctx, transport)
 
 	// Wait for the watcher goroutine to finish before returning.
@@ -262,7 +347,15 @@ func (s *Server) HandleSearch(ctx context.Context, req *mcp.CallToolRequest, inp
 		opts.Names = []string{name}
 	}
 
-	sr, err := s.querier.SearchWithOptions(ctx, queryText, opts)
+	var sr query.SearchResults
+	var err error
+	if s.indexer != nil {
+		// With an indexer available, reconcile results against the current
+		// on-disk state so the agent never receives silently stale content.
+		sr, err = s.searchWithFreshness(ctx, queryText, opts)
+	} else {
+		sr, err = s.querier.SearchWithOptions(ctx, queryText, opts)
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "search failed", slog.Any("error", err))
 		return newErrorResult("search failed; check server logs"), nil, nil
@@ -271,7 +364,11 @@ func (s *Server) HandleSearch(ctx context.Context, req *mcp.CallToolRequest, inp
 	if metadataOnly {
 		var b strings.Builder
 		for _, r := range sr.Results {
-			fmt.Fprintf(&b, "%s:%d  %-20s %s\n", r.FilePath, r.StartLine, r.Name, r.NodeKind)
+			fmt.Fprintf(&b, "%s:%d  %-20s %s", r.FilePath, r.StartLine, r.Name, r.NodeKind)
+			if r.Stale {
+				b.WriteString("  (stale — read file to confirm)")
+			}
+			b.WriteByte('\n')
 		}
 		if sr.Truncated {
 			b.WriteString("(truncated to token budget)\n")
@@ -291,6 +388,108 @@ func (s *Server) HandleSearch(ctx context.Context, req *mcp.CallToolRequest, inp
 	}
 
 	return newTextResult(string(data)), nil, nil
+}
+
+// searchWithFreshness runs a search and reconciles the results against the
+// current on-disk state before returning them:
+//
+//   - Tier 1 (refresh-in-place): if a small number of result files are stale,
+//     re-index just those files and re-run the search so the agent gets fresh
+//     content. Deleted chunks drop out naturally on the re-run.
+//   - Tier 2 (flag): if too many files are stale to re-embed cheaply at query
+//     time, return them flagged with Stale=true so the agent knows to verify.
+//
+// Reconciliation is best-effort: any error falls back to returning the
+// original results. The token budget is applied last, after reconciliation,
+// so it is never spent on results that are about to be refreshed or trimmed.
+func (s *Server) searchWithFreshness(ctx context.Context, text string, opts query.SearchOptions) (query.SearchResults, error) {
+	maxTokens := opts.MaxTokens
+	opts.MaxTokens = 0 // truncate after reconciliation, not inside the search
+
+	sr, err := s.querier.SearchWithOptions(ctx, text, opts)
+	if err != nil {
+		return query.SearchResults{}, err
+	}
+
+	stale, err := s.classifyStale(ctx, sr.Results)
+	if err != nil {
+		slog.WarnContext(ctx, "staleness check failed; returning unreconciled results", slog.Any("error", err))
+		return finalizeResults(sr.Results, maxTokens), nil
+	}
+
+	if len(stale) > 0 {
+		if len(stale) <= s.staleRefreshThreshold {
+			paths := make([]string, 0, len(stale))
+			for p := range stale {
+				paths = append(paths, p)
+			}
+
+			s.indexMu.Lock()
+			ierr := s.indexer.IndexFiles(ctx, paths)
+			s.indexMu.Unlock()
+
+			if ierr != nil {
+				slog.ErrorContext(ctx, "in-place re-index failed; flagging stale results", slog.Any("error", ierr))
+			} else {
+				refreshed, rerr := s.querier.SearchWithOptions(ctx, text, opts)
+				if rerr != nil {
+					return query.SearchResults{}, rerr
+				}
+				sr = refreshed
+				// Recompute against the now-updated index; anything still stale
+				// (e.g. changed again mid-flight) falls through to Tier 2.
+				if recomputed, cerr := s.classifyStale(ctx, sr.Results); cerr == nil {
+					stale = recomputed
+				} else {
+					stale = nil
+				}
+			}
+		}
+
+		// Tier 2: flag any results still stale (over threshold, re-index failed,
+		// or changed again during the refresh).
+		for i := range sr.Results {
+			if _, ok := stale[sr.Results[i].FilePath]; ok {
+				sr.Results[i].Stale = true
+			}
+		}
+	}
+
+	return finalizeResults(sr.Results, maxTokens), nil
+}
+
+// classifyStale returns the set of unique result file paths whose on-disk
+// content has changed since indexing. It fetches the stored per-file state
+// (hash, mtime, size) and delegates the disk comparison to the indexer, which
+// applies the mtime/size fast-path before falling back to a content-hash check.
+func (s *Server) classifyStale(ctx context.Context, results []query.Result) (map[string]struct{}, error) {
+	if len(results) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(results))
+	files := make([]string, 0, len(results))
+	for _, r := range results {
+		if _, ok := seen[r.FilePath]; ok {
+			continue
+		}
+		seen[r.FilePath] = struct{}{}
+		files = append(files, r.FilePath)
+	}
+
+	stored, err := s.querier.StoredFileStates(ctx, files)
+	if err != nil {
+		return nil, fmt.Errorf("reading stored file states: %w", err)
+	}
+	return s.indexer.StaleFiles(ctx, files, stored)
+}
+
+// finalizeResults applies the token budget (if any) as the final step.
+func finalizeResults(results []query.Result, maxTokens int) query.SearchResults {
+	if maxTokens > 0 {
+		return query.Truncate(results, maxTokens)
+	}
+	return query.SearchResults{Results: results, Truncated: false}
 }
 
 // MapInput defines the parameters for the get_map MCP tool.

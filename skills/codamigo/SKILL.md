@@ -17,8 +17,16 @@ Semantic search over source code via tree-sitter AST chunking and hybrid KNN + B
 
 ## MCP or CLI
 
-If `mcp__codamigo__search` and `mcp__codamigo__get_map` are in your tool list, use them
-directly — same parameters, no process spawn. Fall back to CLI only if MCP tools are unavailable.
+If the `mcp__codamigo__*` tools are in your tool list, use them directly — same parameters,
+no process spawn. Fall back to CLI only if MCP tools are unavailable.
+
+| MCP tool | CLI equivalent |
+|----------|----------------|
+| `mcp__codamigo__search` | `codamigo search` |
+| `mcp__codamigo__get_map` | `codamigo map` |
+| `mcp__codamigo__get_callers` | `codamigo callers` |
+| `mcp__codamigo__get_callees` | `codamigo callees` |
+| `mcp__codamigo__get_impact` | `codamigo impact` |
 
 ## Health Check (once per session)
 
@@ -86,6 +94,43 @@ Output: `score  filepath:startLine-endLine [language]` header followed by chunk 
 
 Set `--max-tokens` to cap total output. A `(truncated to token budget)` trailer signals more exist.
 
+**Freshness (MCP only).** `mcp__codamigo__search` reconciles results against the files on disk: a
+few changed files are re-indexed in place, and beyond that the affected results come back marked
+`"stale": true` (or `(stale — read file to confirm)` in metadata mode). Treat a stale result as a
+pointer, not as content — read the file at that line. The `codamigo search` CLI does not reconcile,
+so its snippets can lag the working tree.
+
+### Phase 4: Traverse
+
+Once you have a symbol name, follow its relationships instead of grepping for it. These read the
+prebuilt code graph — **no embedding calls, so they are free** and far cheaper than a text search
+that returns every mention of a common name.
+
+```bash
+# who depends on this? — before changing or deleting it
+codamigo callers <symbol>
+
+# what does this use? — to trace a call chain outward
+codamigo callees <symbol>
+
+# blast radius — before renaming or changing a signature
+codamigo impact <symbol> --depth 2
+```
+
+Output: `filepath:line symbol`, one line per result.
+
+- `callers` and `impact` point at the **reference site** — the line to open.
+- `callees` points at the **definition** being referenced.
+- `(external)` marks a target with no definition in this project (a third-party or stdlib symbol).
+- `(reference)` / `(inherit)` mark a relationship that is not a plain call.
+- `impact` reports `depth=N`, the number of hops from the symbol you asked about.
+
+Use this when the question is "what breaks if I change X" or "where is X actually used" —
+`search` answers "what code is about X", which is a different question.
+
+If a graph command reports that the graph is not built, the index was built with `enable_graph:
+false`. Ask the user before running `codamigo index` to rebuild it.
+
 For all flags see [references/commands.md](references/commands.md).
 For configuration see [references/settings.md](references/settings.md).
 
@@ -97,3 +142,5 @@ For configuration see [references/settings.md](references/settings.md).
 4. **Stop after 3 unsuccessful rounds.** Ask the user to clarify.
 5. **Prefer filters over high limits.** `--package`, `--lang`, `--node-kind` are cheaper than raising `--limit`.
 6. **Paginate before reformulating.** Try `--offset` before rewriting the query.
+7. **Traverse instead of grepping for usages.** `callers` costs nothing and is exact; a text
+   search for a common name burns tokens on unrelated matches.

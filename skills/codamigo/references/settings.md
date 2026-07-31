@@ -22,9 +22,14 @@ Merge order (later wins): built-in defaults → global file → project file →
 | `include_patterns` | []string | [] | Glob patterns to include; empty = include all |
 | `exclude_patterns` | []string | [] | Additional gitignore-style exclude rules |
 | `index_concurrency` | int | 20 | Files indexed in parallel |
-| `max_file_size` | int | 0 | Skip files larger than N bytes; 0 = no limit |
+| `max_file_size` | int | 1048576 | Skip files larger than N bytes; 0 = no limit |
+| `stale_refresh_threshold` | int | 10 | Max changed result files re-indexed in place per search before the rest are flagged stale |
+| `enable_graph` | bool | true | Extract the code graph and expose `callers`/`callees`/`impact`. Set `false` to skip the edge tables and hide those tools |
 
 Changing `embedding_model` or `embedding_dimensions` requires `codamigo reset` then `codamigo index`.
+
+Setting `enable_graph: false` after indexing drops each file's edges as that file is re-indexed, so
+the graph decays rather than freezing. Re-enable it and re-index to rebuild a complete graph.
 
 ## Environment Variables
 

@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/ieshan/codamigo/config"
 	"github.com/ieshan/codamigo/indexer"
@@ -72,9 +73,42 @@ func TestNew(t *testing.T) {
 	}
 	emb := &fakeEmbedder{dim: dim}
 
-	idx := indexer.New(nil, emb, s, w, 1, 0, 0, nil, nil)
+	idx := indexer.New(nil, emb, s, w)
 	if idx == nil {
 		t.Fatal("New returned nil")
+	}
+}
+
+// The onIndexed hook is how serve keeps its query-side caches (the repo map and
+// the graph's symbol index) in step with the store, so a silent break here means
+// stale answers rather than a visible failure.
+func TestWithOnIndexed_FiresAfterWrite(t *testing.T) {
+	dim := 3
+	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	root := t.TempDir()
+	if err = os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := walker.New(root, &config.Config{ProjectRoot: root})
+	if err != nil {
+		t.Fatalf("walker.New: %v", err)
+	}
+	defer w.Close() //nolint:errcheck
+
+	var calls atomic.Int64
+	idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w,
+		indexer.WithOnIndexed(func() { calls.Add(1) }))
+
+	if err = idx.Index(t.Context()); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if got := calls.Load(); got == 0 {
+		t.Error("onIndexed should fire after a write batch")
 	}
 }
 
@@ -108,7 +142,7 @@ func TestIndexFiles_DeletesMissing(t *testing.T) {
 		t.Fatalf("walker.New: %v", err)
 	}
 	emb := &fakeEmbedder{dim: dim}
-	idx := indexer.New(nil, emb, s, w, 1, 0, 0, nil, nil)
+	idx := indexer.New(nil, emb, s, w)
 
 	// IndexFiles on a nonexistent path should trigger DeleteByFile.
 	err = idx.IndexFiles(ctx, []string{"/nonexistent/file.go"})
@@ -320,7 +354,7 @@ func TestIndexFiles_EmbeddingFailurePreservesOldChunks(t *testing.T) {
 
 	// First: index successfully with a working embedder and real chunker.
 	goodEmb := &fakeEmbedder{dim: dim}
-	idx := indexer.New(c, goodEmb, s, w, 1, 0, 0, nil, nil)
+	idx := indexer.New(c, goodEmb, s, w)
 	if err = idx.IndexFiles(ctx, []string{goFile}); err != nil {
 		t.Fatalf("initial index: %v", err)
 	}
@@ -353,7 +387,7 @@ func TestIndexFiles_EmbeddingFailurePreservesOldChunks(t *testing.T) {
 	// is never reached. IndexFiles logs per-file errors but does not return
 	// them (error isolation for concurrent processing).
 	badEmb := &failingEmbedder{dim: dim}
-	idx2 := indexer.New(c, badEmb, s, w, 1, 0, 0, nil, nil)
+	idx2 := indexer.New(c, badEmb, s, w)
 	_ = idx2.IndexFiles(ctx, []string{goFile})
 
 	// Verify old chunks are still intact (embedding failed before ReplaceByFiles).
@@ -392,7 +426,7 @@ func TestIndexFiles_SkipsExcluded(t *testing.T) {
 		t.Fatalf("walker.New: %v", err)
 	}
 	emb := &fakeEmbedder{dim: dim}
-	idx := indexer.New(nil, emb, s, w, 1, 0, 0, nil, nil)
+	idx := indexer.New(nil, emb, s, w)
 
 	// IndexFiles on an excluded file should be a no-op (no chunker, nil chunker would error if called).
 	err = idx.IndexFiles(ctx, []string{mdFile})
@@ -417,7 +451,7 @@ func TestIndexFile_SkipsOutsideRoot(t *testing.T) {
 		t.Fatalf("walker.New: %v", err)
 	}
 	emb := &fakeEmbedder{dim: dim}
-	idx := indexer.New(nil, emb, s, w, 1, 0, 0, nil, nil)
+	idx := indexer.New(nil, emb, s, w)
 
 	// Create a file outside the project root.
 	outsideDir := t.TempDir()
@@ -466,7 +500,7 @@ func TestIndexFile_DotDotHiddenNotRejected(t *testing.T) {
 		t.Fatalf("walker.New: %v", err)
 	}
 	emb := &fakeEmbedder{dim: dim}
-	idx := indexer.New(nil, emb, s, w, 1, 0, 0, nil, nil)
+	idx := indexer.New(nil, emb, s, w)
 
 	if err = idx.IndexFiles(ctx, []string{dotDotFile}); err != nil {
 		t.Errorf("IndexFiles returned unexpected error: %v", err)
@@ -504,7 +538,7 @@ func TestIndex_ConcurrentProcessing(t *testing.T) {
 		t.Fatalf("walker.New: %v", err)
 	}
 	emb := &fakeEmbedder{dim: dim}
-	idx := indexer.New(nil, emb, s, w, 5, 0, 0, nil, nil)
+	idx := indexer.New(nil, emb, s, w, indexer.WithConcurrency(5))
 
 	if err = idx.Index(ctx); err != nil {
 		t.Fatalf("Index: %v", err)
@@ -548,7 +582,7 @@ func TestIndexer_Progress(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.Close() //nolint:errcheck
-		idx := indexer.New(c, &fakeEmbedder{dim: dim}, s, w, 1, 0, 0, nil, spy)
+		idx := indexer.New(c, &fakeEmbedder{dim: dim}, s, w, indexer.WithProgress(spy))
 		if err = idx.Index(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -584,7 +618,7 @@ func TestIndexer_Progress(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.Close() //nolint:errcheck
-		idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w, 1, 0, 0, nil, spy)
+		idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w, indexer.WithProgress(spy))
 		if err = idx.Index(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -620,7 +654,7 @@ func TestIndexer_Progress(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.Close() //nolint:errcheck
-		idx := indexer.New(c, &fakeEmbedder{dim: dim}, s, w, 1, 0, 0, nil, spy)
+		idx := indexer.New(c, &fakeEmbedder{dim: dim}, s, w, indexer.WithProgress(spy))
 		if err = idx.Index(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -652,7 +686,7 @@ func TestIndexer_Progress(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.Close() //nolint:errcheck
-		idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w, 1, 10, 0, nil, spy)
+		idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w, indexer.WithMaxFileSize(10), indexer.WithProgress(spy))
 		if err = idx.Index(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -682,7 +716,7 @@ func TestIndexer_Progress(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer w.Close() //nolint:errcheck
-		idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w, 1, 0, 0, nil, nil)
+		idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w)
 		if err = idx.Index(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -717,7 +751,7 @@ func TestIndexer_Progress_Concurrent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close() //nolint:errcheck
-	idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w, 8, 0, 0, nil, spy)
+	idx := indexer.New(nil, &fakeEmbedder{dim: dim}, s, w, indexer.WithConcurrency(8), indexer.WithProgress(spy))
 
 	synctest.Test(t, func(t *testing.T) {
 		if err := idx.Index(t.Context()); err != nil {
@@ -765,7 +799,7 @@ func TestIndexBatch_CrossFileEmbeddingReuse(t *testing.T) {
 	defer w.Close() //nolint:errcheck
 
 	emb := &fakeEmbedder{dim: dim}
-	idx := indexer.New(c, emb, s, w, 2, 0, 0, nil, nil)
+	idx := indexer.New(c, emb, s, w, indexer.WithConcurrency(2))
 
 	if err = idx.Index(ctx); err != nil {
 		t.Fatalf("Index: %v", err)
@@ -822,7 +856,7 @@ func TestIndexBatch_StageBatchBoundary(t *testing.T) {
 
 	spy := &progressSpy{}
 	// concurrency=2 → stageBatchSize=8, so 20 files span 3 stage batches (8+8+4).
-	idx := indexer.New(c, &fakeEmbedder{dim: dim}, s, w, 2, 0, 0, nil, spy)
+	idx := indexer.New(c, &fakeEmbedder{dim: dim}, s, w, indexer.WithConcurrency(2), indexer.WithProgress(spy))
 
 	if err = idx.Index(ctx); err != nil {
 		t.Fatalf("Index: %v", err)
@@ -883,7 +917,7 @@ func TestIndexBatch_AllChunksFail_SkipsEntireBatch(t *testing.T) {
 	// run; the second stage batch's files are reported as failed and skipped,
 	// but Index() returns nil and earlier files remain committed.
 	emb := &failingEmbedder{dim: dim, failAfter: 1}
-	idx := indexer.New(c, emb, s, w, 2, 0, 0, nil, nil)
+	idx := indexer.New(c, emb, s, w, indexer.WithConcurrency(2))
 
 	if err = idx.Index(ctx); err != nil {
 		t.Fatalf("Index returned unexpected error under partial-failure regime: %v", err)
@@ -946,7 +980,7 @@ func TestIndex_PartialEmbedFailure_SkipsAffectedFilesOnly(t *testing.T) {
 	}
 	prog := &recordingProgress{}
 
-	idx := indexer.New(c, emb, s, w, 1, 0, 0, nil, prog)
+	idx := indexer.New(c, emb, s, w, indexer.WithProgress(prog))
 	if err = idx.Index(t.Context()); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
@@ -1010,7 +1044,7 @@ func TestIndex_NilProgress_LogsButDoesNotPanic(t *testing.T) {
 
 	emb := &partialEmbedder{dim: dim, failTexts: map[string]bool{"BadChunkMarker": true}}
 
-	idx := indexer.New(c, emb, s, w, 1, 0, 0, nil, nil) // progress=nil
+	idx := indexer.New(c, emb, s, w) // no WithProgress: partial failures must not panic without one
 	if err = idx.Index(t.Context()); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
@@ -1072,7 +1106,7 @@ func TestIndex_ContinuesAcrossStageBatches_AfterPartialFailure(t *testing.T) {
 
 	emb := &partialEmbedder{dim: dim, failTexts: map[string]bool{"BadChunkMarker": true}}
 
-	idx := indexer.New(c, emb, s, w, concurrency, 0, 0, nil, nil)
+	idx := indexer.New(c, emb, s, w, indexer.WithConcurrency(concurrency))
 	if err = idx.Index(t.Context()); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
@@ -1096,5 +1130,90 @@ func TestIndex_ContinuesAcrossStageBatches_AfterPartialFailure(t *testing.T) {
 	}
 	if h[p0] != "" {
 		t.Errorf("f0.go should not have been written")
+	}
+}
+
+func TestStaleFiles(t *testing.T) {
+	dim := 3
+	s, err := store.NewSQLiteStore(t.TempDir()+"/test.db", "test-model", dim)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+	ctx := t.Context()
+
+	root := t.TempDir()
+	goFile := filepath.Join(root, "main.go")
+	if err = os.WriteFile(goFile, []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := chunker.NewChunker([]chunker.LanguageConfig{langs.GoLanguage()}, chunker.DefaultConfig())
+	if err != nil {
+		t.Fatalf("NewChunker: %v", err)
+	}
+	cfg := &config.Config{ProjectRoot: root}
+	w, err := walker.New(root, cfg)
+	if err != nil {
+		t.Fatalf("walker.New: %v", err)
+	}
+	idx := indexer.New(c, &fakeEmbedder{dim: dim}, s, w)
+	if err = idx.IndexFiles(ctx, []string{goFile}); err != nil {
+		t.Fatalf("index: %v", err)
+	}
+
+	stored, err := s.FileStates(ctx, []string{goFile})
+	if err != nil {
+		t.Fatalf("FileStates: %v", err)
+	}
+	if st, ok := stored[goFile]; !ok || st.Mtime == 0 || st.Size == 0 {
+		t.Fatalf("expected stored state with mtime+size after index, got %+v", stored[goFile])
+	}
+
+	// 1. Unchanged: fast path, not stale.
+	stale, err := idx.StaleFiles(ctx, []string{goFile}, stored)
+	if err != nil {
+		t.Fatalf("StaleFiles unchanged: %v", err)
+	}
+	if len(stale) != 0 {
+		t.Errorf("unchanged file must not be stale, got %v", stale)
+	}
+
+	// 2. Touched (mtime bumped, identical content): confirm-by-hash defeats the
+	//    false positive, so not stale.
+	future := time.Now().Add(2 * time.Hour)
+	if err = os.Chtimes(goFile, future, future); err != nil {
+		t.Fatal(err)
+	}
+	stale, err = idx.StaleFiles(ctx, []string{goFile}, stored)
+	if err != nil {
+		t.Fatalf("StaleFiles touched: %v", err)
+	}
+	if len(stale) != 0 {
+		t.Errorf("touched-but-unchanged file must not be stale, got %v", stale)
+	}
+
+	// 3. Content modified: stale.
+	if err = os.WriteFile(goFile, []byte("package main\n\nfunc main() { println(1) }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stale, err = idx.StaleFiles(ctx, []string{goFile}, stored)
+	if err != nil {
+		t.Fatalf("StaleFiles modified: %v", err)
+	}
+	if _, ok := stale[goFile]; !ok {
+		t.Errorf("modified file must be stale, got %v", stale)
+	}
+
+	// 4. Deleted: stale.
+	if err = os.Remove(goFile); err != nil {
+		t.Fatal(err)
+	}
+	stale, err = idx.StaleFiles(ctx, []string{goFile}, stored)
+	if err != nil {
+		t.Fatalf("StaleFiles deleted: %v", err)
+	}
+	if _, ok := stale[goFile]; !ok {
+		t.Errorf("deleted file must be stale, got %v", stale)
 	}
 }

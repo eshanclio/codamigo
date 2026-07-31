@@ -55,8 +55,10 @@ type IndexStats struct {
 	Languages  map[string]int // chunk count per language name
 }
 
-// Symbol is a named code symbol extracted from a chunk, used for repo-map generation.
+// Symbol is a named code symbol extracted from a chunk, used for repo-map
+// generation and for resolving edge targets to definitions.
 type Symbol struct {
+	ID        string // chunk ID this symbol was extracted from
 	FilePath  string // path to the source file containing this symbol
 	Name      string // symbol name (e.g. "Store", "Search")
 	NodeKind  string // tree-sitter node kind (e.g. "function_declaration")
@@ -66,12 +68,63 @@ type Symbol struct {
 	Language  string // language name, e.g. "go", "markdown"
 }
 
+// Edge is a relationship from an indexed chunk to a named target, extracted
+// from the AST at index time.
+//
+// DstName is deliberately unresolved: it is the identifier as written in the
+// source, because mapping it to a definition needs whole-project knowledge.
+// Resolution happens at query time; see the query package.
+type Edge struct {
+	SrcID    string // chunks.id of the chunk containing the reference
+	FilePath string // path to the source file, for file-scoped replacement
+	// SrcName is the enclosing definition's name as reported by the parser.
+	// It is kept alongside SrcID because a large function may be split across
+	// several chunks, leaving the chunk that holds the reference unnamed; the
+	// parser still knows which definition the reference sits in.
+	SrcName      string // enclosing definition name; empty when the parser could not determine one
+	Kind         string // "call", "inherit", or "reference"
+	DstName      string // referenced identifier as written
+	DstQualifier string // receiver or package part when qualified (e.g. "fmt" in fmt.Println)
+	Line         int    // 1-based line of the reference
+}
+
+// Import is a module imported by a source file. Imports are file-scoped rather
+// than symbol-to-symbol, so they are tracked separately from Edge and are used
+// to disambiguate which file an edge target resolves to.
+type Import struct {
+	FilePath string // path to the importing source file
+	Module   string // module path as written, e.g. "fmt", "./mod", "stdio.h"
+	Alias    string // local alias when the import declares one; empty otherwise
+	Line     int    // 1-based line of the import
+}
+
 // FileRecords groups records for a single file with its content hash,
 // used for batched write operations.
 type FileRecords struct {
 	FilePath string
 	Records  []Record
 	FileHash string
+	// Mtime is the file's on-disk modification time (Unix seconds) at index
+	// time. Zero when unknown. Used with Size as a cheap staleness fast-path.
+	Mtime int64
+	// Size is the file's on-disk size in bytes at index time. Zero when unknown.
+	Size int64
+	// Edges are the graph edges extracted from this file. Replaced wholesale
+	// with the file's chunks in the same transaction.
+	Edges []Edge
+	// Imports are the modules this file imports. Replaced wholesale with the
+	// file's chunks in the same transaction.
+	Imports []Import
+}
+
+// FileState is the persisted per-file state recorded at index time, used for
+// query-time staleness detection: the (Mtime, Size) pair is a cheap change
+// signal, and ContentHash is the authoritative one checked only when the pair
+// differs from disk.
+type FileState struct {
+	ContentHash string
+	Mtime       int64
+	Size        int64
 }
 
 // Store is the persistence interface for code chunk CRUD and search operations.
@@ -86,6 +139,10 @@ type Store interface {
 	// FileHashes returns a map of filePath → contentHash for all given paths.
 	// Paths not in the store are absent from the returned map.
 	FileHashes(ctx context.Context, filePaths []string) (map[string]string, error)
+	// FileStates returns a map of filePath → FileState (hash, mtime, size)
+	// recorded at index time, for all given paths. Paths not in the store are
+	// absent from the returned map.
+	FileStates(ctx context.Context, filePaths []string) (map[string]FileState, error)
 	// ReplaceByFiles atomically replaces chunks for multiple files in a single
 	// transaction. Each entry's records replace all existing chunks for that file,
 	// and the file hash is updated. Rolls back entirely on error.
@@ -108,6 +165,21 @@ type Store interface {
 	// ListSymbols returns all named symbols ordered by file path and start line.
 	// Unnamed chunks (e.g. comments) are excluded.
 	ListSymbols(ctx context.Context) ([]Symbol, error)
+
+	// EdgesBySource returns all edges originating in the given chunk IDs.
+	// Used to answer "what does this symbol reference?".
+	EdgesBySource(ctx context.Context, srcIDs []string) ([]Edge, error)
+	// EdgesByTargetName returns all edges whose unresolved target name matches
+	// name exactly. Used to answer "what references this symbol?"; callers must
+	// still resolve each edge to confirm it targets the intended definition.
+	EdgesByTargetName(ctx context.Context, name string) ([]Edge, error)
+	// ImportsByFile returns the imports declared by each of the given files.
+	// Paths with no imports are absent from the result.
+	ImportsByFile(ctx context.Context, filePaths []string) ([]Import, error)
+	// EdgeCount returns the total number of stored edges. Zero while chunks
+	// exist means the graph has not been built yet, i.e. indexing ran with the
+	// graph disabled.
+	EdgeCount(ctx context.Context) (int, error)
 
 	// Meta reads a value from the key-value metadata table.
 	Meta(ctx context.Context, key string) (string, error)

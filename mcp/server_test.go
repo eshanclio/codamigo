@@ -19,7 +19,7 @@ import (
 )
 
 func TestNewServer_NilDependencies(t *testing.T) {
-	s := mcp.NewServer(nil, nil, nil, nil)
+	s := mcp.NewServer(nil, nil, nil)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}
@@ -85,7 +85,7 @@ func setupTestServer(t *testing.T) *mcp.Server {
 
 	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, s)
-	return mcp.NewServer(q, nil, nil, []string{"markdown", "yaml", "json"})
+	return mcp.NewServer(q, nil, nil, mcp.WithNonCodeLanguages([]string{"markdown", "yaml", "json"}))
 }
 
 func TestHandleSearch_BasicQuery(t *testing.T) {
@@ -133,7 +133,7 @@ func TestHandleSearch_MissingQuery(t *testing.T) {
 }
 
 func TestHandleSearch_NoQuerier(t *testing.T) {
-	srv := mcp.NewServer(nil, nil, nil, nil)
+	srv := mcp.NewServer(nil, nil, nil)
 	ctx := t.Context()
 
 	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{
@@ -186,7 +186,7 @@ func TestHandleMap_DefaultMaxTokens(t *testing.T) {
 }
 
 func TestHandleMap_NoQuerier(t *testing.T) {
-	srv := mcp.NewServer(nil, nil, nil, nil)
+	srv := mcp.NewServer(nil, nil, nil)
 	ctx := t.Context()
 
 	result, _, err := srv.HandleMap(ctx, &mcpsdk.CallToolRequest{}, mcp.MapInput{})
@@ -263,7 +263,7 @@ func setupTestServerWithRecords(t *testing.T, n int) *mcp.Server {
 
 	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, st)
-	return mcp.NewServer(q, nil, nil, []string{"markdown", "yaml", "json"})
+	return mcp.NewServer(q, nil, nil, mcp.WithNonCodeLanguages([]string{"markdown", "yaml", "json"}))
 }
 
 func TestHandleSearch_LimitClamping(t *testing.T) {
@@ -347,7 +347,7 @@ func TestHandleSearch_RefreshCooldown(t *testing.T) {
 		return nil
 	}}
 
-	srv := mcp.NewServerWithIndexer(q, mock, nil, nil)
+	srv := mcp.NewServerWithIndexer(q, mock, nil)
 	ctx := t.Context()
 
 	// First call — cooldown not yet set; indexer should be called.
@@ -379,6 +379,7 @@ func TestHandleSearch_RefreshCooldown(t *testing.T) {
 type mockIndexer struct {
 	indexFn      func(ctx context.Context) error
 	indexFilesFn func(ctx context.Context, paths []string) error
+	staleFn      func(ctx context.Context, paths []string, stored map[string]store.FileState) (map[string]struct{}, error)
 	indexCalled  bool
 	filesCalled  bool
 }
@@ -397,6 +398,181 @@ func (m *mockIndexer) IndexFiles(ctx context.Context, paths []string) error {
 		return m.indexFilesFn(ctx, paths)
 	}
 	return nil
+}
+
+func (m *mockIndexer) StaleFiles(ctx context.Context, paths []string, stored map[string]store.FileState) (map[string]struct{}, error) {
+	if m.staleFn != nil {
+		return m.staleFn(ctx, paths, stored)
+	}
+	return map[string]struct{}{}, nil
+}
+
+// seedFile writes one single-chunk file into the store via ReplaceByFiles so
+// the files table (stored content hashes) is populated for staleness tests.
+func seedFile(t *testing.T, st store.Store, path, fileHash, content string) {
+	t.Helper()
+	rec := store.Record{
+		ID:          store.RecordID(path, content),
+		FilePath:    path,
+		Language:    "go",
+		Content:     content,
+		ContentHash: store.ContentHash([]byte(content)),
+		NodeKind:    "function",
+		Name:        "fn",
+		StartLine:   1,
+		EndLine:     1,
+		Embedding:   []float32{1, 0, 0},
+	}
+	if err := st.ReplaceByFiles(t.Context(), []store.FileRecords{
+		{FilePath: path, FileHash: fileHash, Records: []store.Record{rec}},
+	}); err != nil {
+		t.Fatalf("seed %s: %v", path, err)
+	}
+}
+
+func decodeResults(t *testing.T, result *mcpsdk.CallToolResult) []query.Result {
+	t.Helper()
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+	text := result.Content[0].(*mcpsdk.TextContent).Text
+	var resp struct {
+		Results []query.Result `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("unmarshal results: %v", err)
+	}
+	return resp.Results
+}
+
+func TestHandleSearch_StaleRefreshInPlace(t *testing.T) {
+	st, err := store.NewSQLiteStore(t.TempDir()+"/s.db", "test-model", 3)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := t.Context()
+
+	seedFile(t, st, "a.go", "oldhash", "OLD content")
+
+	q := query.New(&fakeEmbedder{vec: []float32{1, 0, 0}}, st)
+	reindexed := false
+	mock := &mockIndexer{
+		// a.go reads as stale until it is re-indexed in place.
+		staleFn: func(_ context.Context, _ []string, _ map[string]store.FileState) (map[string]struct{}, error) {
+			if reindexed {
+				return map[string]struct{}{}, nil
+			}
+			return map[string]struct{}{"a.go": {}}, nil
+		},
+		// Simulate a real re-index: replace a.go's chunk with fresh content.
+		indexFilesFn: func(_ context.Context, _ []string) error {
+			reindexed = true
+			seedFile(t, st, "a.go", "newhash", "NEW content")
+			return nil
+		},
+	}
+	srv := mcp.NewServerWithIndexer(q, mock, nil)
+
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{Query: "fn", Limit: 10})
+	if err != nil {
+		t.Fatalf("HandleSearch: %v", err)
+	}
+
+	if !mock.filesCalled {
+		t.Error("expected Tier 1 in-place re-index (IndexFiles) to be called")
+	}
+	results := decodeResults(t, result)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Content != "NEW content" {
+		t.Errorf("expected refreshed content %q, got %q", "NEW content", results[0].Content)
+	}
+	if results[0].Stale {
+		t.Error("result should not be flagged stale after a successful refresh")
+	}
+}
+
+func TestHandleSearch_ManyStaleFlaggedNotRefreshed(t *testing.T) {
+	st, err := store.NewSQLiteStore(t.TempDir()+"/s.db", "test-model", 3)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := t.Context()
+
+	const n = 15 // exceeds staleRefreshThreshold (10)
+	for i := range n {
+		seedFile(t, st, fmt.Sprintf("f%d.go", i), fmt.Sprintf("old-%d", i), fmt.Sprintf("content %d", i))
+	}
+
+	q := query.New(&fakeEmbedder{vec: []float32{1, 0, 0}}, st)
+	mock := &mockIndexer{
+		// Every result file reads as stale.
+		staleFn: func(_ context.Context, paths []string, _ map[string]store.FileState) (map[string]struct{}, error) {
+			m := make(map[string]struct{}, len(paths))
+			for _, p := range paths {
+				m[p] = struct{}{}
+			}
+			return m, nil
+		},
+	}
+	srv := mcp.NewServerWithIndexer(q, mock, nil)
+
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{Query: "fn", Limit: 20})
+	if err != nil {
+		t.Fatalf("HandleSearch: %v", err)
+	}
+
+	if mock.filesCalled {
+		t.Error("should not re-index in place when stale count exceeds threshold")
+	}
+	results := decodeResults(t, result)
+	if len(results) != n {
+		t.Fatalf("expected %d results, got %d", n, len(results))
+	}
+	for _, r := range results {
+		if !r.Stale {
+			t.Errorf("expected result %s to be flagged stale", r.FilePath)
+		}
+	}
+}
+
+func TestHandleSearch_FreshResultsNotFlagged(t *testing.T) {
+	st, err := store.NewSQLiteStore(t.TempDir()+"/s.db", "test-model", 3)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctx := t.Context()
+
+	seedFile(t, st, "a.go", "samehash", "content")
+
+	q := query.New(&fakeEmbedder{vec: []float32{1, 0, 0}}, st)
+	mock := &mockIndexer{
+		// Nothing reads as stale.
+		staleFn: func(_ context.Context, _ []string, _ map[string]store.FileState) (map[string]struct{}, error) {
+			return map[string]struct{}{}, nil
+		},
+	}
+	srv := mcp.NewServerWithIndexer(q, mock, nil)
+
+	result, _, err := srv.HandleSearch(ctx, &mcpsdk.CallToolRequest{}, mcp.SearchInput{Query: "fn", Limit: 10})
+	if err != nil {
+		t.Fatalf("HandleSearch: %v", err)
+	}
+
+	if mock.filesCalled {
+		t.Error("should not re-index when nothing is stale")
+	}
+	results := decodeResults(t, result)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Stale {
+		t.Error("fresh result must not be flagged stale")
+	}
 }
 
 func TestHandleSearch_PackageFilter(t *testing.T) {
@@ -608,7 +784,7 @@ func setupTestServerWithMarkdown(t *testing.T) *mcp.Server {
 
 	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, s)
-	return mcp.NewServer(q, nil, nil, []string{"markdown", "yaml", "json"})
+	return mcp.NewServer(q, nil, nil, mcp.WithNonCodeLanguages([]string{"markdown", "yaml", "json"}))
 }
 
 func TestHandleMap_CodeOnlyParam(t *testing.T) {
@@ -673,7 +849,7 @@ func TestWatchLoop_ReindexTriggersFullIndex(t *testing.T) {
 	}
 	tw := &testWatcher{ch: make(chan []watcher.Event, 1)}
 
-	srv := mcp.NewServerWithIndexer(q, mock, tw, nil)
+	srv := mcp.NewServerWithIndexer(q, mock, tw)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
