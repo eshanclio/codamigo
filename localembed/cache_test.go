@@ -273,7 +273,7 @@ func writeSized(t *testing.T, path string, size int64) {
 	if err != nil {
 		t.Fatalf("Create %s: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if size > 0 {
 		if err := f.Truncate(size); err != nil {
 			t.Fatalf("Truncate %s: %v", path, err)

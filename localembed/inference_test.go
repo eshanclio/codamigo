@@ -469,7 +469,7 @@ func loadGolden(t *testing.T, dim int) [][]float32 {
 	if err != nil {
 		t.Fatalf("opening golden fixture: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var out [][]float32
 	var current []float32

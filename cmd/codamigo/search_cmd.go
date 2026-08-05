@@ -109,7 +109,7 @@ func searchCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			defer s.Close()
+			defer func() { _ = s.Close() }() // best-effort cleanup; the process is exiting either way
 
 			maxTokens := cmd.Int("max-tokens")
 			if maxTokens < 0 {

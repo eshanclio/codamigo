@@ -67,7 +67,7 @@ func newBackend(ev chan fsEvent, errs chan error) (backend, error) {
 }
 
 func (w *inotifyWatcher) Close() error {
-	if w.shared.close() {
+	if w.close() {
 		return nil
 	}
 
@@ -106,12 +106,12 @@ func (w *inotifyWatcher) register(path string, flags uint32) error {
 		return err
 	}
 
-	if _, ok := w.watches.wd[uint32(wd)]; ok {
+	if _, ok := w.watches.wd[uint32(wd)]; ok { // #nosec G115 -- wd is an inotify watch descriptor, checked != -1 above; always small and non-negative
 		return nil
 	}
 
 	w.watches.add(&iwatch{
-		wd:   uint32(wd),
+		wd:   uint32(wd), // #nosec G115 -- wd is an inotify watch descriptor, checked != -1 above; always small and non-negative
 		path: path,
 	})
 	return nil
@@ -178,9 +178,12 @@ func (w *inotifyWatcher) readEvents() {
 			continue
 		}
 
+		// n is a byte count from Read() into a fixed 4096-event buffer,
+		// checked >= SizeofInotifyEvent above; never near uint32 range.
+		limit := uint32(n - unix.SizeofInotifyEvent) // #nosec G115
 		var offset uint32
-		for offset <= uint32(n-unix.SizeofInotifyEvent) {
-			inEvent := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset]))
+		for offset <= limit {
+			inEvent := (*unix.InotifyEvent)(unsafe.Pointer(&buf[offset])) // #nosec G103 -- standard way to decode inotify's binary event stream; offset is bounds-checked by the loop condition above
 
 			if inEvent.Mask&unix.IN_Q_OVERFLOW != 0 {
 				if !w.sendError(ErrEventOverflow) {
@@ -209,7 +212,7 @@ func (w *inotifyWatcher) readEvents() {
 func (w *inotifyWatcher) handleEvent(inEvent *unix.InotifyEvent, buf *[65536]byte, offset uint32) (fsEvent, bool, error) {
 	w.mu.Lock()
 
-	watch := w.watches.byWd(uint32(inEvent.Wd))
+	watch := w.watches.byWd(uint32(inEvent.Wd)) // #nosec G115 -- inEvent.Wd mirrors a watch descriptor this process itself registered; always small and non-negative
 	if watch == nil {
 		w.mu.Unlock()
 		return fsEvent{}, true, nil
@@ -271,6 +274,7 @@ func (w *inotifyWatcher) handleEvent(inEvent *unix.InotifyEvent, buf *[65536]byt
 
 func inotifyEventName(buf *[65536]byte, offset, nameLen uint32) string {
 	start := int(offset + unix.SizeofInotifyEvent)
+	// #nosec G103 -- casting the raw read buffer to a fixed-size byte array is the standard way to read the variable-length name inotify appends after each event; start/nameLen come from the kernel-reported event length, bounds-checked by readEvents' loop
 	bytes := (*[unix.PathMax]byte)(unsafe.Pointer(&buf[start]))[:nameLen:nameLen]
 	for nameLen > 0 && bytes[nameLen-1] == 0 {
 		nameLen--

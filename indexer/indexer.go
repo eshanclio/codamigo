@@ -476,7 +476,7 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 	// Stage 3: Embed
 	// Collect all content hashes across all files.
 	var allContentHashes []string
-	var origins []embedOrigin
+	origins := make([]embedOrigin, 0, len(chunked))
 	contentHashMap := make([][]string, len(chunked))
 
 	for i, cf := range chunked {
@@ -512,12 +512,11 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 	// owning at least one failed chunk is marked failed and skipped from
 	// writing; its existing store record (if any) is left untouched so the
 	// next indexing run will retry the file.
-	var newEmbeddings [][]float32
-	var embedErrs []error
 	failedFileIdx := make(map[int]struct{})
 	failedFileErrs := make(map[int][]error)
+	embeddingsByFile := make(map[int]map[int][]float32) // fileIdx -> chunkIdx -> embedding
 	if len(uncachedTexts) > 0 {
-		newEmbeddings, embedErrs = idx.embedder.EmbedBatchPartial(ctx, uncachedTexts)
+		newEmbeddings, embedErrs := idx.embedder.EmbedBatchPartial(ctx, uncachedTexts)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -525,30 +524,24 @@ func (idx *Indexer) processStageBatch(ctx context.Context, paths []string) error
 			return fmt.Errorf("embedder returned %d vectors / %d errs for %d texts",
 				len(newEmbeddings), len(embedErrs), len(uncachedTexts))
 		}
+		// Distribute results (failures and SUCCESSFUL embeddings) back to
+		// per-file records in a single pass.
 		for k, e := range embedErrs {
-			if e == nil {
+			origin := origins[k]
+			if e != nil {
+				failedFileIdx[origin.fileIdx] = struct{}{}
+				failedFileErrs[origin.fileIdx] = append(failedFileErrs[origin.fileIdx], e)
+				slog.WarnContext(ctx, "embedding chunk failed",
+					slog.String("path", chunked[origin.fileIdx].info.path),
+					slog.Int("chunk", origin.chunkIdx),
+					slog.Any("error", e))
 				continue
 			}
-			fi := origins[k].fileIdx
-			failedFileIdx[fi] = struct{}{}
-			failedFileErrs[fi] = append(failedFileErrs[fi], e)
-			slog.WarnContext(ctx, "embedding chunk failed",
-				slog.String("path", chunked[fi].info.path),
-				slog.Int("chunk", origins[k].chunkIdx),
-				slog.Any("error", e))
+			if embeddingsByFile[origin.fileIdx] == nil {
+				embeddingsByFile[origin.fileIdx] = make(map[int][]float32)
+			}
+			embeddingsByFile[origin.fileIdx][origin.chunkIdx] = newEmbeddings[k]
 		}
-	}
-
-	// Distribute SUCCESSFUL embeddings back to per-file records.
-	embeddingsByFile := make(map[int]map[int][]float32) // fileIdx -> chunkIdx -> embedding
-	for k, origin := range origins {
-		if embedErrs[k] != nil {
-			continue
-		}
-		if embeddingsByFile[origin.fileIdx] == nil {
-			embeddingsByFile[origin.fileIdx] = make(map[int][]float32)
-		}
-		embeddingsByFile[origin.fileIdx][origin.chunkIdx] = newEmbeddings[k]
 	}
 
 	// Stage 4: Write

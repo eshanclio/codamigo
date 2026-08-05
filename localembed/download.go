@@ -67,7 +67,7 @@ func Download(ctx context.Context, opts DownloadOptions) (*DownloadResult, error
 	if len(m.Files) == 0 {
 		return nil, fmt.Errorf("%w: %s has an empty manifest", ErrUnknownModel, m.DisplayName())
 	}
-	if err := os.MkdirAll(opts.ModelDir, 0o755); err != nil {
+	if err := os.MkdirAll(opts.ModelDir, 0o750); err != nil {
 		return nil, fmt.Errorf("creating model directory: %w", err)
 	}
 
@@ -215,11 +215,12 @@ func removeDownloaded(path string) {
 }
 
 func sha256File(path string) (string, error) {
+	// #nosec G304 -- path is a file this process just downloaded into its own model cache dir, not external input
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // the file is only being read
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err

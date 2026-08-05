@@ -548,7 +548,7 @@ func renderMap(packages []packageGroup, opts MapOptions) string {
 					vis = isExported(sym.Name, fileLang, sym.NodeKind)
 				}
 				lineRange := formatLineRange(sym.StartLine, sym.EndLine)
-				fb.WriteString(fmt.Sprintf("  %s%s %s%s\n", vis, formatNodeKind(sym.NodeKind), sym.Name, lineRange))
+				fmt.Fprintf(&fb, "  %s%s %s%s\n", vis, formatNodeKind(sym.NodeKind), sym.Name, lineRange)
 
 				// Render children of this top-level symbol.
 				for _, child := range children[sym.Name] {
@@ -557,7 +557,7 @@ func renderMap(packages []packageGroup, opts MapOptions) string {
 						childVis = isExported(child.Name, fileLang, child.NodeKind)
 					}
 					childLineRange := formatLineRange(child.StartLine, child.EndLine)
-					fb.WriteString(fmt.Sprintf("    %s%s %s%s\n", childVis, formatNodeKind(child.NodeKind), child.Name, childLineRange))
+					fmt.Fprintf(&fb, "    %s%s %s%s\n", childVis, formatNodeKind(child.NodeKind), child.Name, childLineRange)
 					rendered[child.Parent+"\x00"+child.Name+"\x00"+strconv.Itoa(child.StartLine)] = struct{}{}
 				}
 			}
@@ -576,7 +576,7 @@ func renderMap(packages []packageGroup, opts MapOptions) string {
 					vis = isExported(sym.Name, fileLang, sym.NodeKind)
 				}
 				lineRange := formatLineRange(sym.StartLine, sym.EndLine)
-				fb.WriteString(fmt.Sprintf("  %s%s %s%s\n", vis, formatNodeKind(sym.NodeKind), sym.Name, lineRange))
+				fmt.Fprintf(&fb, "  %s%s %s%s\n", vis, formatNodeKind(sym.NodeKind), sym.Name, lineRange)
 			}
 
 			fb.WriteString("\n")
@@ -601,7 +601,7 @@ func renderMap(packages []packageGroup, opts MapOptions) string {
 	if truncated {
 		remainingFiles := totalFiles - filesWritten
 		remainingPkgs := len(packages) - pkgsWritten
-		b.WriteString(fmt.Sprintf("# ... %d more files in %d packages (truncated to ~%d tokens)\n", remainingFiles, remainingPkgs, opts.MaxTokens))
+		fmt.Fprintf(&b, "# ... %d more files in %d packages (truncated to ~%d tokens)\n", remainingFiles, remainingPkgs, opts.MaxTokens)
 	}
 
 	return b.String()

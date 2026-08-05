@@ -106,7 +106,7 @@ func runGraphQuery(
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }() // best-effort cleanup; the process is exiting either way
 
 	refs, err := run(query.New(emb, s), symbol)
 	if err != nil {

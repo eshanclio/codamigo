@@ -11,7 +11,7 @@
 package config
 
 import (
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- non-cryptographic use, see ProjectHash
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -307,6 +307,9 @@ func ProjectConfigPath() string {
 // that "/home/user/project/" and "/home/user/project" produce the same hash.
 func ProjectHash(projectRoot string) string {
 	trimmed := strings.Trim(projectRoot, "/")
+	// #nosec G401 -- non-cryptographic use: stable directory-name hash, not a
+	// security boundary; switching algorithms would relocate existing users'
+	// data dirs.
 	sum := sha1.Sum([]byte(trimmed))
 	return hex.EncodeToString(sum[:])
 }
@@ -365,11 +368,12 @@ func HomeProjectConfigPath(projectRoot string) (string, error) {
 // Returns an error if the file does not exist, contains unknown keys, or has
 // malformed duration strings.
 func Load(path string) (*Config, error) {
+	// #nosec G304 -- path is the CLI's own config path (flag/default), not external input
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening config %q: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // best-effort cleanup; the file is only being read
 
 	dec := yaml.NewDecoder(f)
 	dec.KnownFields(true)

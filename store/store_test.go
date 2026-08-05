@@ -62,7 +62,7 @@ func TestNewSQLiteStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 }
 
 func TestNewSQLiteStore_MetadataPersisted(t *testing.T) {
@@ -81,13 +81,13 @@ func TestNewSQLiteStore_MetadataPersisted(t *testing.T) {
 	if v != "test-model" {
 		t.Errorf("embedding_model = %q, want %q", v, "test-model")
 	}
-	s.Close()
+	_ = s.Close()
 
 	s2, err := store.NewSQLiteStore(dbPath, "test-model", 3)
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 }
 
 func TestNewSQLiteStore_ModelMismatch(t *testing.T) {
@@ -97,7 +97,7 @@ func TestNewSQLiteStore_ModelMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	s.Close()
+	_ = s.Close()
 
 	_, err = store.NewSQLiteStore(dbPath, "model-b", 3)
 	if err == nil {
@@ -112,7 +112,7 @@ func TestNewSQLiteStore_DimMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	s.Close()
+	_ = s.Close()
 
 	_, err = store.NewSQLiteStore(dbPath, "model-a", 768)
 	if err == nil {
@@ -135,7 +135,7 @@ func TestNewSQLiteStore_SchemaVersionMismatch(t *testing.T) {
 	if err = s.SetMeta(t.Context(), "schema_version", "2"); err != nil {
 		t.Fatalf("SetMeta: %v", err)
 	}
-	s.Close()
+	_ = s.Close()
 
 	_, err = store.NewSQLiteStore(dbPath, "model-a", 3)
 	if err == nil {
@@ -176,7 +176,7 @@ func TestCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	r := makeRecord("main.go", "main", "func main() {}", []float32{0.1, 0.2, 0.3})
@@ -210,7 +210,7 @@ func TestUpsert_and_Delete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	r := makeRecord("main.go", "main", "func main() {}", []float32{0.1, 0.2, 0.3})
@@ -234,7 +234,7 @@ func TestUpsert_BatchMultipleRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -253,7 +253,7 @@ func TestDeleteByFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -294,7 +294,7 @@ func TestUpsert_WrongEmbeddingDimension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	r := makeRecord("main.go", "main", "func main() {}", []float32{0.1, 0.2, 0.3, 0.4}) // 4 floats, store expects 3
@@ -308,7 +308,7 @@ func TestUpsert_EmptySlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	if err = s.Upsert(ctx, nil); err != nil {
@@ -324,7 +324,7 @@ func TestFileHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	// No files yet — query should return empty map.
@@ -367,7 +367,7 @@ func TestListFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 
@@ -400,7 +400,7 @@ func TestSearch_VectorOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -436,7 +436,7 @@ func TestSearch_BM25Only(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -472,7 +472,7 @@ func TestSearch_HybridMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -510,7 +510,7 @@ func TestSearch_LanguageFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	goRecord := makeRecord("main.go", "main", "func main() {}", []float32{0.9, 0.1, 0.0})
@@ -545,7 +545,7 @@ func TestSearch_EmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	results, err := s.Search(ctx, store.SearchQuery{
@@ -566,7 +566,7 @@ func TestEmbeddingsByContentHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	r1 := makeRecord("a.go", "funcA", "func A() {}", []float32{0.1, 0.2, 0.3})
@@ -602,7 +602,7 @@ func TestSearch_PathFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -666,7 +666,7 @@ func TestSearch_PathFilter_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -703,7 +703,7 @@ func TestNewSQLiteStore_CreatesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	if _, err = os.Stat(filepath.Join(dir, "nested", "subdir")); errors.Is(err, fs.ErrNotExist) {
 		t.Error("NewSQLiteStore did not create nested directory")
@@ -716,7 +716,7 @@ func TestSQLiteStore_SearchOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -767,7 +767,7 @@ func TestSQLiteStore_Stats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	// Empty store.
@@ -814,7 +814,7 @@ func TestIntegration_FullWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 
@@ -924,7 +924,7 @@ func TestListSymbols(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -1004,7 +1004,7 @@ func TestReplaceByFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	oldRecords := []store.Record{
@@ -1077,7 +1077,7 @@ func TestReplaceByFiles_RollbackOnBadEmbedding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	oldRecord := store.Record{
@@ -1133,7 +1133,7 @@ func TestReplaceByFiles_MultiFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	entries := []store.FileRecords{
@@ -1221,7 +1221,7 @@ func TestFileHashes_Batch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	entries := []store.FileRecords{
@@ -1274,7 +1274,7 @@ func TestSearch_CombinedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -1313,7 +1313,7 @@ func TestSQLiteStore_CurrentSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	v, err := s.Meta(ctx, "schema_version")
@@ -1330,7 +1330,7 @@ func TestListSymbols_EmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	symbols, err := s.ListSymbols(t.Context())
 	if err != nil {
@@ -1347,7 +1347,7 @@ func TestSearch_NameFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -1381,7 +1381,7 @@ func TestSearch_NodeKindFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -1415,7 +1415,7 @@ func TestSearch_MetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -1454,7 +1454,7 @@ func TestSearch_SingleLanguageKNNPreFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -1488,7 +1488,7 @@ func TestSearch_BatchFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := make([]store.Record, 20)
@@ -1538,7 +1538,7 @@ func TestSearch_IterativeDeepening(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 
@@ -1592,7 +1592,7 @@ func TestEmbeddingsByContentHash_Deterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := t.Context()
 
@@ -1648,7 +1648,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -1728,7 +1728,7 @@ func TestFileStates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	// Absent path: omitted from the result.

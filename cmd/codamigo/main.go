@@ -130,8 +130,8 @@ func indexCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			defer s.Close()
-			defer w.Close() //nolint:errcheck
+			defer func() { _ = s.Close() }() // best-effort cleanup; the process is exiting either way
+			defer func() { _ = w.Close() }() // best-effort cleanup; the process is exiting either way
 
 			// Wrap ctx so the TUI can cancel the indexer directly via ctrl+c.
 			// In TTY mode the terminal is in raw mode (ISIG cleared), so ctrl+c
@@ -233,8 +233,8 @@ func serveCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			defer s.Close()
-			defer w.Close()
+			defer func() { _ = s.Close() }() // best-effort cleanup; the process is exiting either way
+			defer func() { _ = w.Close() }() // best-effort cleanup; the process is exiting either way
 			queryEmb, err := queryEmbedderFor(cfg, indexEmb)
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
@@ -251,7 +251,7 @@ func serveCmd() *cli.Command {
 			if err != nil {
 				return fmt.Errorf("creating watcher: %w", err)
 			}
-			defer wch.Close()
+			defer func() { _ = wch.Close() }() // best-effort cleanup; the process is exiting either way
 			srv := mcp.NewServer(q, idx, wch,
 				mcp.WithNonCodeLanguages(cfg.NonCodeLanguages),
 				mcp.WithGraph(cfg.GraphEnabled()),
@@ -422,7 +422,7 @@ func buildComponents(cfg *config.Config, storePath string, dim int) (*chunker.Ch
 	filter := buildExtensionFilter(allLangs)
 	w, err := walker.New(cfg.ProjectRoot, cfg, walker.WithFileFilter(filter))
 	if err != nil {
-		s.Close()
+		_ = s.Close() // best-effort cleanup; the walker error below is the one worth reporting
 		return nil, nil, nil, fmt.Errorf("creating walker: %w", err)
 	}
 	return c, s, w, nil

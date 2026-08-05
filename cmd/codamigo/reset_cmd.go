@@ -44,19 +44,19 @@ func resetCmd() *cli.Command {
 // is testable without touching os.Stdin/os.Stdout.
 func runReset(storePath string, force bool, in io.Reader, out io.Writer) error {
 	if _, err := os.Stat(storePath); errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintln(out, "Nothing to reset.")
+		_, _ = fmt.Fprintln(out, "Nothing to reset.")
 		return nil
 	}
 
 	if !force {
-		fmt.Fprintf(out, "The following file will be deleted:\n  %s\nDelete store file? [y/N]: ", storePath)
+		_, _ = fmt.Fprintf(out, "The following file will be deleted:\n  %s\nDelete store file? [y/N]: ", storePath)
 		scanner := bufio.NewScanner(in)
 		answer := ""
 		if scanner.Scan() {
 			answer = strings.TrimSpace(scanner.Text())
 		}
 		if !strings.EqualFold(answer, "y") {
-			fmt.Fprintln(out, "Aborted.")
+			_, _ = fmt.Fprintln(out, "Aborted.")
 			return nil
 		}
 	}
@@ -66,6 +66,6 @@ func runReset(storePath string, force bool, in io.Reader, out io.Writer) error {
 			return fmt.Errorf("deleting store%s: %w", suffix, err)
 		}
 	}
-	fmt.Fprintf(out, "Store deleted: %s\n", storePath)
+	_, _ = fmt.Fprintf(out, "Store deleted: %s\n", storePath)
 	return nil
 }

@@ -62,7 +62,7 @@ func setupTestServer(t *testing.T) *mcp.Server {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -237,7 +237,7 @@ func setupTestServerWithRecords(t *testing.T, n int) *mcp.Server {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	records := make([]store.Record, n)
 	for i := range n {
@@ -336,7 +336,7 @@ func TestHandleSearch_RefreshCooldown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, st)
@@ -450,7 +450,7 @@ func TestHandleSearch_StaleRefreshInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	ctx := t.Context()
 
 	seedFile(t, st, "a.go", "oldhash", "OLD content")
@@ -499,7 +499,7 @@ func TestHandleSearch_ManyStaleFlaggedNotRefreshed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	ctx := t.Context()
 
 	const n = 15 // exceeds staleRefreshThreshold (10)
@@ -544,7 +544,7 @@ func TestHandleSearch_FreshResultsNotFlagged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 	ctx := t.Context()
 
 	seedFile(t, st, "a.go", "samehash", "content")
@@ -761,7 +761,7 @@ func setupTestServerWithMarkdown(t *testing.T) *mcp.Server {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	ctx := t.Context()
 	records := []store.Record{
@@ -832,7 +832,7 @@ func TestWatchLoop_ReindexTriggersFullIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { st.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, st)
@@ -856,8 +856,8 @@ func TestWatchLoop_ReindexTriggersFullIndex(t *testing.T) {
 
 	// Use a pipe so ServeIO blocks on reading (MCP loop waits for input).
 	r, w := io.Pipe()
-	defer w.Close()
-	defer r.Close()
+	defer func() { _ = w.Close() }()
+	defer func() { _ = r.Close() }()
 
 	var wg sync.WaitGroup
 	wg.Add(1)

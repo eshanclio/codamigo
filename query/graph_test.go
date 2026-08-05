@@ -16,7 +16,7 @@ func graphSetup(t *testing.T, entries []store.FileRecords) (*query.Querier, stor
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	if len(entries) > 0 {
 		if err = s.ReplaceByFiles(t.Context(), entries); err != nil {

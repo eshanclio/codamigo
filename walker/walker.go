@@ -387,7 +387,7 @@ func readIgnoreFile(ctx context.Context, fsys fs.FS, filePath string) []string {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // best-effort cleanup; the file is only being read
 
 	var lines []string
 	scanner := bufio.NewScanner(f)

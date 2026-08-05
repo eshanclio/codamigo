@@ -21,7 +21,7 @@ func setupTree(t *testing.T) string {
 
 	dirs := []string{"src", "src/utils", "vendor", ".git"}
 	for _, d := range dirs {
-		os.MkdirAll(filepath.Join(root, d), 0o755)
+		_ = os.MkdirAll(filepath.Join(root, d), 0o755)
 	}
 
 	files := map[string]string{
@@ -33,7 +33,7 @@ func setupTree(t *testing.T) string {
 		".gitignore":          "vendor/\n",
 	}
 	for name, content := range files {
-		os.WriteFile(filepath.Join(root, name), []byte(content), 0o644)
+		_ = os.WriteFile(filepath.Join(root, name), []byte(content), 0o644)
 	}
 
 	return root
@@ -46,7 +46,7 @@ func TestWalk_BasicTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var paths []string
 	for path, err := range w.Walk(t.Context()) {
@@ -89,7 +89,7 @@ func TestWalk_IncludePatterns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
@@ -112,7 +112,7 @@ func TestWalk_ExcludePatterns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
@@ -132,7 +132,7 @@ func TestWalk_ContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
@@ -160,7 +160,7 @@ func TestMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	if !w.Match(filepath.Join(root, "src/main.go")) {
 		t.Error("Match should return true for src/main.go")
@@ -200,7 +200,7 @@ func TestWalk_SkipsCodamigoDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
@@ -219,7 +219,7 @@ func TestMatch_SkipsCodamigoDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	codamigoPath := filepath.Join(root, ".codamigo", "store.db")
 	if w.Match(codamigoPath) {
@@ -233,14 +233,14 @@ func TestWalk_NestedGitignore(t *testing.T) {
 	// Create directory structure.
 	dirs := []string{"src", "src/vendor", "src/lib", "build"}
 	for _, d := range dirs {
-		os.MkdirAll(filepath.Join(root, d), 0o755)
+		_ = os.MkdirAll(filepath.Join(root, d), 0o755)
 	}
 
 	// Root .gitignore: ignore build/
-	os.WriteFile(filepath.Join(root, ".gitignore"), []byte("build/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte("build/\n"), 0o644)
 
 	// Nested .gitignore in src/: ignore vendor/
-	os.WriteFile(filepath.Join(root, "src", ".gitignore"), []byte("vendor/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "src", ".gitignore"), []byte("vendor/\n"), 0o644)
 
 	// Create files.
 	files := []string{
@@ -251,7 +251,7 @@ func TestWalk_NestedGitignore(t *testing.T) {
 		"build/output.go",
 	}
 	for _, f := range files {
-		os.WriteFile(filepath.Join(root, f), []byte("package x"), 0o644)
+		_ = os.WriteFile(filepath.Join(root, f), []byte("package x"), 0o644)
 	}
 
 	cfg := &config.Config{ProjectRoot: root}
@@ -259,7 +259,7 @@ func TestWalk_NestedGitignore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var walked []string
 	for path, err := range w.Walk(t.Context()) {
@@ -282,16 +282,16 @@ func TestWalk_NestedGitignore(t *testing.T) {
 
 func TestWalker_IsIgnored(t *testing.T) {
 	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "src", "vendor"), 0o755)
-	os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0o644)
-	os.WriteFile(filepath.Join(root, "src", ".gitignore"), []byte("vendor/\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "src", "vendor"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte("*.log\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "src", ".gitignore"), []byte("vendor/\n"), 0o644)
 
 	cfg := &config.Config{ProjectRoot: root}
 	w, err := walker.New(root, cfg)
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	tests := []struct {
 		path string
@@ -316,14 +316,14 @@ func TestWalk_NestedGitignoreNegation(t *testing.T) {
 
 	dirs := []string{"src", "src/generated", "src/generated/keep"}
 	for _, d := range dirs {
-		os.MkdirAll(filepath.Join(root, d), 0o755)
+		_ = os.MkdirAll(filepath.Join(root, d), 0o755)
 	}
 
 	// Root .gitignore: ignore all generated/ dirs.
-	os.WriteFile(filepath.Join(root, ".gitignore"), []byte("generated/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte("generated/\n"), 0o644)
 
 	// Nested .gitignore in src/: re-include generated/ via negation.
-	os.WriteFile(filepath.Join(root, "src", ".gitignore"), []byte("!generated/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "src", ".gitignore"), []byte("!generated/\n"), 0o644)
 
 	files := []string{
 		"main.go",
@@ -331,7 +331,7 @@ func TestWalk_NestedGitignoreNegation(t *testing.T) {
 		"src/generated/models.go",
 	}
 	for _, f := range files {
-		os.WriteFile(filepath.Join(root, f), []byte("package x"), 0o644)
+		_ = os.WriteFile(filepath.Join(root, f), []byte("package x"), 0o644)
 	}
 
 	cfg := &config.Config{ProjectRoot: root}
@@ -339,7 +339,7 @@ func TestWalk_NestedGitignoreNegation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var walked []string
 	for path, err := range w.Walk(t.Context()) {
@@ -362,18 +362,18 @@ func TestWalk_NestedGitignoreNegation(t *testing.T) {
 func TestWalk_CaignoreOnly(t *testing.T) {
 	root := t.TempDir()
 
-	os.MkdirAll(filepath.Join(root, "vendor"), 0o755)
-	os.WriteFile(filepath.Join(root, "vendor", "dep.go"), []byte("package dep"), 0o644)
-	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "vendor"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "vendor", "dep.go"), []byte("package dep"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
 	// No .gitignore — only .caignore.
-	os.WriteFile(filepath.Join(root, ".caignore"), []byte("vendor/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".caignore"), []byte("vendor/\n"), 0o644)
 
 	cfg := &config.Config{ProjectRoot: root}
 	w, err := walker.New(root, cfg)
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var walked []string
 	for path, err := range w.Walk(t.Context()) {
@@ -395,22 +395,22 @@ func TestWalk_CaignoreOnly(t *testing.T) {
 func TestWalk_CaignoreExtends(t *testing.T) {
 	root := t.TempDir()
 
-	os.MkdirAll(filepath.Join(root, "logs"), 0o755)
-	os.MkdirAll(filepath.Join(root, "tmp"), 0o755)
-	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(root, "logs", "app.log"), []byte("log data"), 0o644)
-	os.WriteFile(filepath.Join(root, "tmp", "scratch.txt"), []byte("temp"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "logs"), 0o755)
+	_ = os.MkdirAll(filepath.Join(root, "tmp"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "logs", "app.log"), []byte("log data"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "tmp", "scratch.txt"), []byte("temp"), 0o644)
 	// .gitignore ignores logs/
-	os.WriteFile(filepath.Join(root, ".gitignore"), []byte("logs/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte("logs/\n"), 0o644)
 	// .caignore additionally ignores tmp/
-	os.WriteFile(filepath.Join(root, ".caignore"), []byte("tmp/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".caignore"), []byte("tmp/\n"), 0o644)
 
 	cfg := &config.Config{ProjectRoot: root}
 	w, err := walker.New(root, cfg)
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var walked []string
 	for path, err := range w.Walk(t.Context()) {
@@ -433,20 +433,20 @@ func TestWalk_CaignoreExtends(t *testing.T) {
 func TestWalk_CaignoreNegationOverride(t *testing.T) {
 	root := t.TempDir()
 
-	os.MkdirAll(filepath.Join(root, "generated"), 0o755)
-	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(root, "generated", "models.go"), []byte("package gen"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "generated"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "generated", "models.go"), []byte("package gen"), 0o644)
 	// .gitignore ignores generated/
-	os.WriteFile(filepath.Join(root, ".gitignore"), []byte("generated/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte("generated/\n"), 0o644)
 	// .caignore re-includes generated/ via negation.
-	os.WriteFile(filepath.Join(root, ".caignore"), []byte("!generated/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".caignore"), []byte("!generated/\n"), 0o644)
 
 	cfg := &config.Config{ProjectRoot: root}
 	w, err := walker.New(root, cfg)
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var walked []string
 	for path, err := range w.Walk(t.Context()) {
@@ -469,15 +469,15 @@ func TestWalk_CaignoreNegationOverride(t *testing.T) {
 func TestWalk_CaignoreFileNotYielded(t *testing.T) {
 	root := t.TempDir()
 
-	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(root, ".caignore"), []byte("*.tmp\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".caignore"), []byte("*.tmp\n"), 0o644)
 
 	cfg := &config.Config{ProjectRoot: root}
 	w, err := walker.New(root, cfg)
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	for path, err := range w.Walk(t.Context()) {
 		if err != nil {
@@ -493,18 +493,18 @@ func TestWalk_CaignoreFileNotYielded(t *testing.T) {
 func TestWalker_CaignoreMatchAndIsIgnored(t *testing.T) {
 	root := t.TempDir()
 
-	os.MkdirAll(filepath.Join(root, "cache"), 0o755)
-	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(root, "cache", "data.bin"), []byte("binary"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, "cache"), 0o755)
+	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "cache", "data.bin"), []byte("binary"), 0o644)
 	// No .gitignore. .caignore ignores cache/.
-	os.WriteFile(filepath.Join(root, ".caignore"), []byte("cache/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".caignore"), []byte("cache/\n"), 0o644)
 
 	cfg := &config.Config{ProjectRoot: root}
 	w, err := walker.New(root, cfg)
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	if !w.Match(filepath.Join(root, "main.go")) {
 		t.Error("Match should return true for main.go")
@@ -525,22 +525,22 @@ func TestWalk_NestedCaignore(t *testing.T) {
 
 	dirs := []string{"src", "src/fixtures", "lib"}
 	for _, d := range dirs {
-		os.MkdirAll(filepath.Join(root, d), 0o755)
+		_ = os.MkdirAll(filepath.Join(root, d), 0o755)
 	}
 
-	os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
-	os.WriteFile(filepath.Join(root, "src", "app.go"), []byte("package src"), 0o644)
-	os.WriteFile(filepath.Join(root, "src", "fixtures", "data.json"), []byte("{}"), 0o644)
-	os.WriteFile(filepath.Join(root, "lib", "util.go"), []byte("package lib"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "src", "app.go"), []byte("package src"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "src", "fixtures", "data.json"), []byte("{}"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "lib", "util.go"), []byte("package lib"), 0o644)
 	// Nested .caignore in src/ ignores fixtures/ (only applies under src/).
-	os.WriteFile(filepath.Join(root, "src", ".caignore"), []byte("fixtures/\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "src", ".caignore"), []byte("fixtures/\n"), 0o644)
 
 	cfg := &config.Config{ProjectRoot: root}
 	w, err := walker.New(root, cfg)
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var walked []string
 	for path, err := range w.Walk(t.Context()) {
@@ -585,7 +585,7 @@ func TestWalker_GitignorePartialReadOnScannerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var walked []string
 	for path, err := range w.Walk(t.Context()) {
@@ -677,7 +677,7 @@ func TestWalk_Symlinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walker.New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	var yielded []string
 	for path, err := range w.Walk(t.Context()) {
@@ -712,16 +712,16 @@ func TestWalk_Symlinks(t *testing.T) {
 
 func TestConcurrentWalkAndMatch(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "b.go"), []byte("package b"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sub", "b.go"), []byte("package b"), 0o644)
 
 	cfg := config.Defaults()
 	w, err := walker.New(dir, cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -772,7 +772,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		var yielded []string
 		for path, err := range w.Walk(t.Context()) {
@@ -796,7 +796,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		for path, err := range w.Walk(t.Context()) {
 			if err != nil {
@@ -816,7 +816,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		for path, err := range w.Walk(t.Context()) {
 			if err != nil {
@@ -837,7 +837,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		var yielded []string
 		for path, err := range w.Walk(t.Context()) {
@@ -858,7 +858,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		if w.Match(filepath.Join(root, "font.ttf")) {
 			t.Error("Match should return false for .ttf with extension filter")
@@ -876,7 +876,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		if w.Match(filepath.Join(root, "data.csv")) {
 			t.Error("Match should return false for .csv (unsupported extension via IndexFiles path)")
@@ -895,7 +895,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		var yielded []string
 		for path, err := range w.Walk(t.Context()) {
@@ -926,7 +926,7 @@ func TestWithFileFilter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()

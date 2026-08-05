@@ -55,7 +55,7 @@ func (s *sqliteStore) scanEdges(ctx context.Context, query string, args []any) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeQuietly(rows)
 
 	var edges []Edge
 	for rows.Next() {
@@ -105,7 +105,7 @@ func (s *sqliteStore) scanImports(ctx context.Context, query string, args []any)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer closeQuietly(rows)
 
 	var imports []Import
 	for rows.Next() {
