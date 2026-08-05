@@ -15,7 +15,7 @@ import (
 	"go.yaml.in/yaml/v4"
 
 	"github.com/ieshan/codamigo/config"
-	"github.com/ieshan/go-embedder/openai"
+	"github.com/ieshan/codamigo/localembed"
 	"github.com/urfave/cli/v3"
 )
 
@@ -30,7 +30,15 @@ func initCmd() *cli.Command {
 			}
 			defaults := config.Defaults()
 
-			var baseURL, model, apiKey string
+			// cfg accumulates just enough to build an embedder for the smoke test,
+			// whether it came from an existing file or from the prompts below. It is
+			// deliberately not loadConfig: init must reflect what the user just
+			// typed, not the merged five-layer view.
+			cfg := &config.Config{
+				EmbeddingLocalBackend:   defaults.EmbeddingLocalBackend,
+				EmbeddingLocalMaxSeqLen: defaults.EmbeddingLocalMaxSeqLen,
+				EmbeddingLocalBatchSize: defaults.EmbeddingLocalBatchSize,
+			}
 
 			_, statErr := os.Stat(globalPath)
 			if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
@@ -43,26 +51,53 @@ func initCmd() *cli.Command {
 				if err != nil {
 					return fmt.Errorf("loading global config: %w", err)
 				}
-				baseURL = existing.EmbeddingBaseURL
-				model = existing.EmbeddingModel
-				apiKey = existing.EmbeddingAPIKey
+				cfg = cfg.Merge(existing)
+				if cfg.EmbeddingProvider == "" {
+					cfg.EmbeddingProvider = defaults.EmbeddingProvider
+				}
 			} else {
-				// Prompt user for global config values.
 				scanner := bufio.NewScanner(os.Stdin)
-				baseURL = readPrompt(scanner, os.Stdout, "Base URL", defaults.EmbeddingBaseURL)
-				model = readPrompt(scanner, os.Stdout, "Model", defaults.EmbeddingModel)
-				apiKey = readPrompt(scanner, os.Stdout, "API key (leave blank to set CODAMIGO_API_KEY env var instead)", "")
+				fmt.Printf("Provider: %q runs the model in-process with no API key and no network;\n"+
+					"anything else is an OpenAI-compatible HTTP API.\n", localProvider)
+				cfg.EmbeddingProvider = readPrompt(scanner, os.Stdout, "Provider", defaults.EmbeddingProvider)
+
+				if cfg.EmbeddingProvider == localProvider {
+					cfg.EmbeddingModel = readPrompt(scanner, os.Stdout,
+						"Model ("+strings.Join(localembed.RegistryNames(), ", ")+")", localembed.DefaultModel)
+					cfg.EmbeddingHFToken = readPrompt(scanner, os.Stdout,
+						"HuggingFace token (leave blank; only needed for gated models)", "")
+					if model, err := localembed.Lookup(cfg.EmbeddingModel); err == nil && model.Dimensions > 0 {
+						cfg.EmbeddingDimensions = model.Dimensions
+					}
+				} else {
+					cfg.EmbeddingBaseURL = readPrompt(scanner, os.Stdout, "Base URL", defaults.EmbeddingBaseURL)
+					cfg.EmbeddingModel = readPrompt(scanner, os.Stdout, "Model", defaults.EmbeddingModel)
+					cfg.EmbeddingAPIKey = readPrompt(scanner, os.Stdout,
+						"API key (leave blank to set CODAMIGO_API_KEY env var instead)", "")
+				}
 
 				// Write global config.
 				if err := os.MkdirAll(filepath.Dir(globalPath), 0o755); err != nil {
 					return fmt.Errorf("creating config directory: %w", err)
 				}
+				// 0o600 below matters: this file may hold an API key or a
+				// HuggingFace token.
 				type globalFile struct {
-					EmbeddingBaseURL string `yaml:"embedding_base_url,omitempty"`
-					EmbeddingModel   string `yaml:"embedding_model,omitempty"`
-					EmbeddingAPIKey  string `yaml:"embedding_api_key,omitempty"`
+					EmbeddingProvider   string `yaml:"embedding_provider,omitempty"`
+					EmbeddingBaseURL    string `yaml:"embedding_base_url,omitempty"`
+					EmbeddingModel      string `yaml:"embedding_model,omitempty"`
+					EmbeddingAPIKey     string `yaml:"embedding_api_key,omitempty"`
+					EmbeddingDimensions int    `yaml:"embedding_dimensions,omitempty"`
+					EmbeddingHFToken    string `yaml:"embedding_hf_token,omitempty"`
 				}
-				gf := globalFile{EmbeddingBaseURL: baseURL, EmbeddingModel: model, EmbeddingAPIKey: apiKey}
+				gf := globalFile{
+					EmbeddingProvider:   cfg.EmbeddingProvider,
+					EmbeddingBaseURL:    cfg.EmbeddingBaseURL,
+					EmbeddingModel:      cfg.EmbeddingModel,
+					EmbeddingAPIKey:     cfg.EmbeddingAPIKey,
+					EmbeddingDimensions: cfg.EmbeddingDimensions,
+					EmbeddingHFToken:    cfg.EmbeddingHFToken,
+				}
 				data, err := yaml.Marshal(gf)
 				if err != nil {
 					return fmt.Errorf("marshaling global config: %w", err)
@@ -113,22 +148,45 @@ func initCmd() *cli.Command {
 				}
 			}
 
-			// Smoke-test the embedding model.
-			fmt.Printf("\nTesting embedding model: %s\n", model)
-			emb, err := openai.New(openai.Options{
-				BaseURL: baseURL,
-				APIKey:  apiKey,
-				Model:   model,
-			})
+			// Smoke-test the embedding model. Routed through newEmbedder rather
+			// than constructing openai.Client directly, so the local provider is
+			// covered by the same check.
+			fmt.Printf("\nTesting embedding model: %s\n", cfg.EmbeddingModel)
+			if cfg.EmbeddingProvider == localProvider {
+				// Nothing to reach over the network, but the weights must be on
+				// disk first — say so instead of failing with a confusing error.
+				model, err := localembed.Lookup(cfg.EmbeddingModel)
+				if err != nil {
+					fmt.Printf("[FAIL] %v\n", err)
+					return nil
+				}
+				root, err := localModelsRoot(cfg)
+				if err != nil {
+					fmt.Printf("[FAIL] %v\n", err)
+					return nil
+				}
+				if ok, _ := isModelDownloaded(root, model); !ok {
+					warnIfModelMissing(root, model)
+					fmt.Printf("\nThen run 'codamigo index' to build the index.\n")
+					return nil
+				}
+			}
+			emb, err := newEmbedder(cfg, roleQuery)
 			if err != nil {
 				fmt.Printf("[FAIL] Invalid embedder config: %v\n", err)
 				return nil
 			}
-			if _, err := emb.Embed(ctx, "codamigo init test"); err != nil {
+			defer closeEmbedder(emb)
+			switch _, err := emb.Embed(ctx, "codamigo init test"); {
+			case err != nil && cfg.EmbeddingProvider == localProvider:
+				fmt.Printf("[FAIL] Local embedding failed: %v\n", err)
+			case err != nil:
 				fmt.Printf("[FAIL] Embedding model unreachable: %v\n", err)
 				fmt.Println("Check your API key and base URL, or set CODAMIGO_API_KEY.")
-			} else {
-				fmt.Printf("[OK]  Embedding model reachable (model: %s)\n", model)
+			case cfg.EmbeddingProvider == localProvider:
+				fmt.Printf("[OK]  Local embedding works (model: %s, dims: %d)\n", cfg.EmbeddingModel, emb.Dim())
+			default:
+				fmt.Printf("[OK]  Embedding model reachable (model: %s)\n", cfg.EmbeddingModel)
 			}
 
 			fmt.Println("\nRun 'codamigo index' to build the index.")

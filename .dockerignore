@@ -1,0 +1,7 @@
+.git
+.gitignore
+.claude
+codamigo
+*.md
+!go.mod
+!go.sum
