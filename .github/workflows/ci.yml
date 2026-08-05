@@ -1,0 +1,288 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR to avoid wasting CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # go-code-chunker compiles C sources via cgo and mattn/go-sqlite3 is
+  # cgo-only, so CGO_ENABLED=0 is not an option (see Dockerfile).
+  CGO_ENABLED: "1"
+  # sqlite_fts5 enables the FTS5 index the BM25 half of hybrid search depends
+  # on. Every `make` target passes it; `go` invocations here do the same.
+  GOFLAGS: "-tags=sqlite_fts5"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      # libsqlite3-dev supplies sqlite3.h, which sqlite-vec's own C sources
+      # include. golangci-lint type-checks the whole module, cgo files
+      # included, so it needs the header just like a normal build does.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --build-tags=sqlite_fts5
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      # libsqlite3-dev supplies sqlite3.h, which sqlite-vec's own C sources
+      # include. Without it the build fails with "sqlite-vec.h:7:10: fatal
+      # error: sqlite3.h: No such file or directory". See Dockerfile.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Build
+        run: go build -o codamigo ./cmd/codamigo/
+
+      - name: Vet
+        run: go vet ./...
+
+      # localembed's inference tests skip themselves unless a model has been
+      # downloaded (CODAMIGO_TEST_MODELS_ROOT is unset here), so this does not
+      # need model weights or a compute plugin to pass. The full suite,
+      # including real inference, runs in the test-race job below.
+      - name: Test
+        run: go test ./...
+
+  # Runs the whole suite under -race, including real local-embedding inference
+  # on the XLA backend (the pure-Go backend trips checkptr inside GoMLX's own
+  # unsafe matmul under -race and skips itself; see localembed/race_test.go).
+  # That needs model weights and the XLA plugin on disk, so this job downloads
+  # them and caches both across runs — see the "Cache" step below for why a
+  # cache hit makes that download a no-op rather than skipping it outright.
+  test-race:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: Download modules
+        run: go mod download
+
+      # Model weights are pinned and checksummed per revision in
+      # localembed/model.go, and the XLA CPU plugin version is pinned inside
+      # go-xla itself. Hashing model.go into the key means a registry bump
+      # (new revision or model) invalidates the cache automatically instead
+      # of needing a manual bump here.
+      #
+      # ~/.codamigo/models holds the downloaded weights (the default
+      # CODAMIGO_TEST_MODELS_ROOT location); ~/.local/lib is where go-xla's
+      # AutoInstall puts the PJRT plugin on Linux.
+      #
+      # github.job is part of the key because this job downloads both
+      # registry models while bench-localembed below only needs one; sharing
+      # a key would let whichever job saves first "win" and leave the other
+      # re-downloading its missing model on every run (cache keys are
+      # immutable, so a second save under the same key is silently skipped).
+      - name: Cache local embedding models and XLA plugin
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.codamigo/models
+            ~/.local/lib
+          key: ${{ runner.os }}-codamigo-embed-models-${{ github.job }}-${{ hashFiles('localembed/model.go') }}
+
+      # Re-run on every job regardless of cache outcome: Download() verifies
+      # each file against its pinned checksum and skips ones already present,
+      # and go-xla's AutoInstall likewise skips the network round-trip once
+      # the pinned plugin version is on disk at ~/.local/lib. So on a cache
+      # hit these two calls are a fast no-op; on a cache miss they populate
+      # what the cache step above will save. This also means a cache
+      # eviction or key change degrades to a slow run rather than a failure.
+      - name: Download embedding models and XLA plugin
+        run: |
+          go run ./cmd/codamigo download-model --model bge-small-en-v1.5 --xla
+          go run ./cmd/codamigo download-model --model all-MiniLM-L6-v2
+
+      - name: Test (race)
+        run: go test -race ./...
+
+  # Reproduces the throughput table in README.md and in the comment at the
+  # top of localembed/backend.go. Benchmarks never fail the build (`go test
+  # -bench` exits 0 regardless of the numbers) — this job exists to catch the
+  # benchmark itself failing to compile or run, and to keep the published
+  # numbers reproducible on demand.
+  bench-localembed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: Download modules
+        run: go mod download
+
+      # BenchmarkEmbedBatch only exercises bge-small-en-v1.5, on both the go
+      # and xla backends, so all-MiniLM-L6-v2 is not needed here. See the
+      # test-race job above for why github.job is part of the key.
+      - name: Cache local embedding models and XLA plugin
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.codamigo/models
+            ~/.local/lib
+          key: ${{ runner.os }}-codamigo-embed-models-${{ github.job }}-${{ hashFiles('localembed/model.go') }}
+
+      - name: Download embedding model and XLA plugin
+        run: go run ./cmd/codamigo download-model --model bge-small-en-v1.5 --xla
+
+      - name: Bench (localembed)
+        run: go test -bench . -benchmem ./localembed/...
+
+  # Official Go team action (golang/govulncheck-action, mirrored from
+  # go.googlesource.com/govulncheck-action). Reports known vulnerabilities
+  # from the Go vulnerability database (vuln.go.dev) that are actually
+  # reachable from this module's call graph, not just present in go.sum —
+  # that call-graph analysis is what keeps it low-noise compared to a plain
+  # dependency-list CVE scan.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # govulncheck builds the module to compute the call graph, so it needs
+      # the same cgo header sqlite-vec's C sources include as every other job.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          # Reuse this job's own checkout instead of having the action do a
+          # second one.
+          repo-checkout: false
+          # Pins to the toolchain version go.mod already requires, instead of
+          # a separate hardcoded version here.
+          go-version-file: go.mod
+          go-package: ./...
+
+  # securego/gosec's own action.yml runs gosec inside a bare Docker container
+  # (docker://securego/gosec:<version>), which has no C toolchain or SQLite
+  # headers and can't build this module's cgo packages. Installing the binary
+  # onto the same runner as the other jobs — where CGO_ENABLED, the
+  # sqlite_fts5 build tag (via GOFLAGS above), and libsqlite3-dev are already
+  # set up — gives gosec's type-checking source loader what it needs to
+  # actually analyze cgo-dependent packages instead of skipping them.
+  #
+  # continue-on-error: a first run against this codebase turned up 61
+  # pre-existing findings (mostly G104 unhandled-error-on-Close, plus a
+  # handful of G301/G304/G306/G115/G202/G401/G505). None of that is this
+  # job's fault to gate on — report-only until it's triaged, then remove
+  # continue-on-error so new findings start blocking merges.
+  gosec:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: gosec
+        run: gosec -tags=sqlite_fts5 ./...
+
+  # go.uber.org/nilaway, run standalone (its own recommended path outside the
+  # nilaway repo's self-check golangci-lint plugin build). -include-pkgs
+  # scopes analysis to this module instead of every dependency NilAway can
+  # see, which is the flag NilAway's own docs call out as the standard way to
+  # keep a first run's signal-to-noise ratio sane on an existing codebase.
+  #
+  # continue-on-error: a first run against this codebase found 3 potential
+  # nil panics in indexer/indexer.go, pre-existing and unrelated to this
+  # workflow. Report-only until triaged, then remove continue-on-error.
+  nilaway:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsqlite3-dev
+
+      - name: Install NilAway
+        run: go install go.uber.org/nilaway/cmd/nilaway@latest
+
+      - name: NilAway
+        run: nilaway -include-pkgs="github.com/ieshan/codamigo" ./...
