@@ -275,7 +275,7 @@ func New(opts Options) (*Embedder, error) {
 			descriptor:  descriptor,
 			queryPrefix: descriptor.QueryPrefix,
 			backendName: backendName,
-			padID:       int32(padID),
+			padID:       int32(padID), // #nosec G115 -- padID is a tokenizer vocab id, always well under int32 range
 			dim:         dim,
 			maxSeqLen:   maxSeqLen,
 			seqB:        seqB,
@@ -471,7 +471,7 @@ func (s *shared) encode(text string) []int32 {
 	}
 	row := make([]int32, len(ids))
 	for i, id := range ids {
-		row[i] = int32(id)
+		row[i] = int32(id) // #nosec G115 -- id is a tokenizer vocab id, always well under int32 range
 	}
 	return row
 }

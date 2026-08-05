@@ -93,13 +93,13 @@ func New(cfg *config.Config, matchFn func(string) bool, fsys fs.FS) (Watcher, er
 			return newPollWatcher(cfg, matchFn, fsys), nil
 		}
 		if watchLimitHit {
-			fw.Close()
+			_ = fw.Close() // best-effort cleanup; we fall back to the poll watcher either way
 			slog.Warn("watch limit reached, falling back to polling",
 				slog.String("hint", "on Linux: increase fs.inotify.max_user_watches; on macOS: increase ulimit -n"))
 			return newPollWatcher(cfg, matchFn, fsys), nil
 		}
 		if !fw.probe(2 * time.Second) {
-			fw.Close()
+			_ = fw.Close() // best-effort cleanup; we fall back to the poll watcher either way
 			slog.Warn("fsnotify probe failed — events not delivered; falling back to polling",
 				slog.String("hint", "this may indicate a Docker bind mount or network filesystem; set watch_mode: \"poll\" to skip this probe"))
 			return newPollWatcher(cfg, matchFn, fsys), nil

@@ -57,7 +57,7 @@ func newFSNotifyWatcher(cfg *config.Config, matchFn func(string) bool, fsys fs.F
 
 	watchLimitHit, err := w.addDirs()
 	if err != nil {
-		bw.Close()
+		_ = bw.Close() // best-effort cleanup; the addDirs error below is the one worth reporting
 		return nil, false, err
 	}
 
@@ -257,9 +257,9 @@ func (w *fsnotifyWatcher) probe(timeout time.Duration) bool {
 		return w.probeFn(timeout)
 	}
 	probePath := filepath.Join(w.root, ".watchprobe")
-	defer os.Remove(probePath)
+	defer func() { _ = os.Remove(probePath) }() // best-effort cleanup of the throwaway probe file
 
-	if err := os.WriteFile(probePath, []byte("probe"), 0o644); err != nil {
+	if err := os.WriteFile(probePath, []byte("probe"), 0o600); err != nil {
 		slog.Warn("fsnotify probe: cannot create probe file", slog.Any("error", err))
 		return true
 	}

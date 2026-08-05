@@ -47,7 +47,7 @@ func TestNew_NilDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	for _, tc := range []struct {
 		name string
@@ -74,7 +74,7 @@ func TestQuerier_Search(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -117,7 +117,7 @@ func TestQuerier_SearchWithOptions_PathFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -165,7 +165,7 @@ func TestQuerier_SearchWithOptions_Offset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -229,7 +229,7 @@ func TestQuerier_Map_BasicOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -297,7 +297,7 @@ func TestQuerier_Map_Truncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	var records []store.Record
@@ -334,7 +334,7 @@ func TestQuerier_Map_EmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	emb := &fakeEmbedder{vec: []float32{1, 0, 0}}
 	q := query.New(emb, s)
@@ -355,7 +355,7 @@ func TestQuerier_Map_NestedSymbolsIndented(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -399,7 +399,7 @@ func TestQuerier_SearchWithOptions_MaxTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	content := strings.Repeat("x", 100)
@@ -437,7 +437,7 @@ func TestQuerier_SearchWithOptions_MaxTokens_Zero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -470,7 +470,7 @@ func TestQuerier_SearchWithOptions_MaxTokens_AlwaysOneResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -537,7 +537,7 @@ func TestQuerier_CacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -584,7 +584,7 @@ func TestQuerier_SearchWithOptions_PackageFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -632,7 +632,7 @@ func TestQuerier_Map_AllOptionsZeroValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -673,7 +673,7 @@ func TestQuerier_Map_CodeOnlyFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -739,7 +739,7 @@ func TestQuerier_Map_LineRanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -786,7 +786,7 @@ func TestQuerier_Map_FileSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	// 5 symbols in one file to trigger summary (threshold is 5).
@@ -832,7 +832,7 @@ func TestQuerier_Map_Visibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -875,7 +875,7 @@ func TestQuerier_Map_VisibilityPython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -918,7 +918,7 @@ func TestQuerier_Map_VisibilityJSExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -961,7 +961,7 @@ func TestQuerier_Map_NestingHierarchy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -1037,7 +1037,7 @@ func TestQuerier_Map_OrphanChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -1072,7 +1072,7 @@ func TestQuerier_Map_CodeOnlyCustomLanguages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{
@@ -1129,7 +1129,7 @@ func TestQuerier_Map_CodeOnlyEmptyList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	records := []store.Record{

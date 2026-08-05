@@ -200,7 +200,7 @@ func newKqueue() (kq int, closepipe [2]int, err error) {
 
 	err = unix.Pipe(closepipe[:])
 	if err != nil {
-		unix.Close(kq)
+		_ = unix.Close(kq)
 		return kq, closepipe, err
 	}
 	unix.CloseOnExec(closepipe[0])
@@ -212,16 +212,16 @@ func newKqueue() (kq int, closepipe [2]int, err error) {
 
 	ok, err := unix.Kevent(kq, changes, nil, nil)
 	if ok == -1 {
-		unix.Close(kq)
-		unix.Close(closepipe[0])
-		unix.Close(closepipe[1])
+		_ = unix.Close(kq)
+		_ = unix.Close(closepipe[0])
+		_ = unix.Close(closepipe[1])
 		return kq, closepipe, err
 	}
 	return kq, closepipe, nil
 }
 
 func (w *kqueueWatcher) Close() error {
-	if w.shared.close() {
+	if w.close() {
 		return nil
 	}
 
@@ -239,11 +239,11 @@ func (w *kqueueWatcher) Close() error {
 			continue
 		}
 		_ = w.register([]int{info.wd}, unix.EV_DELETE, 0)
-		unix.Close(info.wd)
+		_ = unix.Close(info.wd)
 		w.watches.remove(info.wd, name)
 	}
 
-	unix.Close(w.closepipe[1]) // Send "quit" message to readEvents
+	_ = unix.Close(w.closepipe[1]) // Send "quit" message to readEvents
 	return nil
 }
 
@@ -276,14 +276,14 @@ func (w *kqueueWatcher) remove(name string, unwatchFiles bool) error {
 		return err
 	}
 
-	unix.Close(info.wd)
+	_ = unix.Close(info.wd)
 
 	isDir := w.watches.remove(info.wd, name)
 
 	if unwatchFiles && isDir {
 		pathsToRemove := w.watches.watchesInDir(name)
 		for _, p := range pathsToRemove {
-			w.Remove(p)
+			_ = w.Remove(p)
 		}
 	}
 	return nil
@@ -351,7 +351,7 @@ func (w *kqueueWatcher) addWatch(name string, flags uint32, listDir bool) (strin
 
 	err := w.register([]int{info.wd}, unix.EV_ADD|unix.EV_CLEAR|unix.EV_ENABLE, flags)
 	if err != nil {
-		unix.Close(info.wd)
+		_ = unix.Close(info.wd)
 		return "", err
 	}
 
@@ -386,7 +386,7 @@ func (w *kqueueWatcher) readEvents() {
 		close(w.events)
 		close(w.errors)
 		_ = unix.Close(w.kq)
-		unix.Close(w.closepipe[0])
+		_ = unix.Close(w.closepipe[0])
 	}()
 
 	eventBuffer := make([]unix.Kevent_t, 10)
@@ -402,7 +402,7 @@ func (w *kqueueWatcher) readEvents() {
 
 		for _, kevent := range kevents {
 			var (
-				wd   = int(kevent.Ident)
+				wd   = int(kevent.Ident) // #nosec G115 -- kqueue idents mirror small fds/watch descriptors, never near int overflow
 				mask = uint32(kevent.Fflags)
 			)
 
@@ -424,12 +424,12 @@ func (w *kqueueWatcher) readEvents() {
 			event := w.newEvent(path.name, path.linkName, mask)
 
 			if event.Has(fsRename) || event.Has(fsRemove) {
-				w.remove(event.Name, false)
+				_ = w.remove(event.Name, false)
 				w.watches.markSeen(event.Name, false)
 			}
 
 			if path.isDir && event.Has(fsWrite) && !event.Has(fsRemove) {
-				w.dirChange(event.Name)
+				_ = w.dirChange(event.Name)
 			} else if !w.sendEvent(event) {
 				return
 			}

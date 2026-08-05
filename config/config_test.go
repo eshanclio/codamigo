@@ -288,7 +288,9 @@ func writeTempConfig(t *testing.T, content string) string {
 	if _, err := f.WriteString(content); err != nil {
 		t.Fatalf("writing temp config: %v", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing temp config: %v", err)
+	}
 	return f.Name()
 }
 
@@ -326,9 +328,13 @@ func ExampleLoad() {
 	if err != nil {
 		panic(err)
 	}
-	defer os.Remove(f.Name())
-	f.WriteString("embedding_model: my-model\npoll_interval: 10s\n")
-	f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	if _, err := f.WriteString("embedding_model: my-model\npoll_interval: 10s\n"); err != nil {
+		panic(err)
+	}
+	if err := f.Close(); err != nil {
+		panic(err)
+	}
 
 	cfg, err := config.Load(f.Name())
 	if err != nil {
@@ -591,7 +597,7 @@ func TestProjectHash(t *testing.T) {
 				t.Errorf("hash length = %d, want 40", len(h))
 			}
 			for _, c := range h {
-				if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 					t.Errorf("hash contains non-hex char %q in %q", c, h)
 				}
 			}

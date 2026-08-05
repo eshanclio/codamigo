@@ -34,7 +34,7 @@ func TestPollWatcher_DetectsNewFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new watcher: %v", err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
@@ -84,7 +84,7 @@ func TestPollWatcher_DetectsModification(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new watcher: %v", err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
@@ -133,7 +133,7 @@ func TestPollWatcher_DetectsRemoval(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new watcher: %v", err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
@@ -175,7 +175,7 @@ func TestPollWatcher_ContextCancellation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new watcher: %v", err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		ctx, cancel := context.WithCancel(t.Context())
 		ch := w.Watch(ctx)
@@ -215,7 +215,7 @@ func TestFSNotifyWatcher_DetectsNewFile(t *testing.T) {
 	if err != nil {
 		t.Skipf("fsnotify not available: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -262,7 +262,7 @@ func TestFSNotifyWatcher_DetectsRemoval(t *testing.T) {
 	if err != nil {
 		t.Skipf("fsnotify not available: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -305,7 +305,7 @@ func TestPollWatcher_AdaptiveInterval(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
@@ -356,7 +356,7 @@ func TestFSNotifyWatcher_DetectsModification(t *testing.T) {
 	if err != nil {
 		t.Skipf("fsnotify not available: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -403,7 +403,7 @@ func TestPollWatcher_MatchFnFilters(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new watcher: %v", err)
 		}
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
@@ -502,7 +502,7 @@ func TestFSNotifyWatcher_CleansUpDeletedDir(t *testing.T) {
 	if err != nil {
 		t.Skipf("fsnotify not available: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -584,7 +584,7 @@ func TestFSNotifyWatcher_DetectsNewSubdir(t *testing.T) {
 	if err != nil {
 		t.Skipf("fsnotify not available: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -666,7 +666,7 @@ func TestNew_AutoModeWithProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	// In "auto" mode on a real filesystem, the probe should succeed and
 	// return an fsnotify watcher. Verify the watcher delivers events.

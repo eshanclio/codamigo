@@ -39,10 +39,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libsqlite3-dev
 
+      # golangci-lint-action@v6's "latest" resolves within the v1.x line
+      # (v1.64.8 at time of writing), which refuses to run against this
+      # module's go 1.26.5 directive ("the Go language version used to
+      # build golangci-lint is lower than the targeted Go version"). v9
+      # supports golangci-lint v2, and pinning a v2 release keeps the
+      # Go-version check satisfied without depending on how "latest"
+      # happens to resolve.
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12.2
           args: --build-tags=sqlite_fts5
 
   test:
@@ -225,14 +232,15 @@ jobs:
   # set up — gives gosec's type-checking source loader what it needs to
   # actually analyze cgo-dependent packages instead of skipping them.
   #
-  # continue-on-error: a first run against this codebase turned up 61
-  # pre-existing findings (mostly G104 unhandled-error-on-Close, plus a
-  # handful of G301/G304/G306/G115/G202/G401/G505). None of that is this
-  # job's fault to gate on — report-only until it's triaged, then remove
-  # continue-on-error so new findings start blocking merges.
+  # The 61 pre-existing findings from the first run against this codebase
+  # (mostly G104 unhandled-error-on-Close, plus a handful of
+  # G301/G304/G306/G115/G202/G401/G505) have all been triaged: fixed where
+  # real, suppressed with an inline `// #nosec Gxxx -- reason` comment
+  # (gosec's own directive — it does not understand golangci-lint's
+  # `//nolint` comments when run standalone like this) where the flagged
+  # pattern is safe by inspection. New findings now block merges.
   gosec:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -260,12 +268,15 @@ jobs:
   # see, which is the flag NilAway's own docs call out as the standard way to
   # keep a first run's signal-to-noise ratio sane on an existing codebase.
   #
-  # continue-on-error: a first run against this codebase found 3 potential
-  # nil panics in indexer/indexer.go, pre-existing and unrelated to this
-  # workflow. Report-only until triaged, then remove continue-on-error.
+  # The 3 potential nil panics found by the first run against this codebase
+  # (all in indexer/indexer.go, one structural root cause) have been fixed:
+  # a nilable `var x []T` accumulator became a non-nil `make([]T, 0, n)`,
+  # and the two consuming loops were merged into the same block that
+  # assigns and validates the embedder's result slices, giving NilAway's
+  # flow analysis a straight-line path to see them as non-nil. New findings
+  # now block merges.
   nilaway:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4

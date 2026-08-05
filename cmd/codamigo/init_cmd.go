@@ -77,7 +77,7 @@ func initCmd() *cli.Command {
 				}
 
 				// Write global config.
-				if err := os.MkdirAll(filepath.Dir(globalPath), 0o755); err != nil {
+				if err := os.MkdirAll(filepath.Dir(globalPath), 0o750); err != nil {
 					return fmt.Errorf("creating config directory: %w", err)
 				}
 				// 0o600 below matters: this file may hold an API key or a
@@ -111,11 +111,11 @@ func initCmd() *cli.Command {
 			// Always create project config if missing — runs regardless of global config state.
 			projectPath := config.ProjectConfigPath()
 			if _, err := os.Stat(projectPath); errors.Is(err, fs.ErrNotExist) {
-				if err := os.MkdirAll(filepath.Dir(projectPath), 0o755); err != nil {
+				if err := os.MkdirAll(filepath.Dir(projectPath), 0o750); err != nil {
 					return fmt.Errorf("creating project config directory: %w", err)
 				}
 				projectContent := "# codamigo project settings\n# include_patterns: []\n# exclude_patterns: []\n"
-				if err := os.WriteFile(projectPath, []byte(projectContent), 0o644); err != nil {
+				if err := os.WriteFile(projectPath, []byte(projectContent), 0o600); err != nil {
 					return fmt.Errorf("writing project config: %w", err)
 				}
 				fmt.Printf("Created project config: %s\n", projectPath)
@@ -134,11 +134,11 @@ func initCmd() *cli.Command {
 				dataDir, err := config.ProjectDataDir(wd)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: could not resolve data directory: %v\n", err)
-				} else if err := os.MkdirAll(dataDir, 0o755); err != nil {
+				} else if err := os.MkdirAll(dataDir, 0o750); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: could not create data directory: %v\n", err)
 				} else {
 					pathFile := filepath.Join(dataDir, "project_path")
-					if err := os.WriteFile(pathFile, []byte(wd), 0o644); err != nil {
+					if err := os.WriteFile(pathFile, []byte(wd), 0o600); err != nil {
 						fmt.Fprintf(os.Stderr, "Warning: could not write project_path: %v\n", err)
 					}
 				}
@@ -201,9 +201,9 @@ func initCmd() *cli.Command {
 // buffered input from piped stdin is not lost between calls.
 func readPrompt(scanner *bufio.Scanner, w io.Writer, prompt, defaultVal string) string {
 	if defaultVal != "" {
-		fmt.Fprintf(w, "%s [%s]: ", prompt, defaultVal)
+		_, _ = fmt.Fprintf(w, "%s [%s]: ", prompt, defaultVal)
 	} else {
-		fmt.Fprintf(w, "%s: ", prompt)
+		_, _ = fmt.Fprintf(w, "%s: ", prompt)
 	}
 	if scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -227,6 +227,7 @@ func appendToGitignore(projectRoot string) error {
 	const entry = ".codamigo/"
 	gitignorePath := filepath.Join(projectRoot, ".gitignore")
 
+	// #nosec G304 -- gitignorePath is derived from the CLI's own project root, not external input
 	content, err := os.ReadFile(gitignorePath)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("reading .gitignore: %w", err)
@@ -238,6 +239,9 @@ func appendToGitignore(projectRoot string) error {
 		}
 	}
 
+	// #nosec G304,G302 -- 0o644 matches .gitignore's conventional world-readable
+	// permissions; gitignorePath is derived from the CLI's own project root,
+	// not external input.
 	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("opening .gitignore: %w", err)

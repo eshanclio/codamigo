@@ -63,7 +63,7 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	root := t.TempDir()
 	cfg := &config.Config{ProjectRoot: root}
@@ -88,7 +88,7 @@ func TestNew_NilDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	root := t.TempDir()
 	w, err := walker.New(root, &config.Config{ProjectRoot: root})
@@ -127,7 +127,7 @@ func TestWithOnIndexed_FiresAfterWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	root := t.TempDir()
 	if err = os.WriteFile(filepath.Join(root, "a.txt"), []byte("hello"), 0o644); err != nil {
@@ -157,7 +157,7 @@ func TestIndexFiles_DeletesMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	// Pre-insert a record for a file that doesn't exist on disk.
@@ -370,7 +370,7 @@ func TestIndexFiles_EmbeddingFailurePreservesOldChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -446,7 +446,7 @@ func TestIndexFiles_SkipsExcluded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -480,7 +480,7 @@ func TestIndexFile_SkipsOutsideRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -522,7 +522,7 @@ func TestIndexFile_DotDotHiddenNotRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -562,7 +562,7 @@ func TestIndex_ConcurrentProcessing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -605,7 +605,7 @@ func TestIndexer_Progress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		root := t.TempDir()
 		goFile := filepath.Join(root, "main.go")
 		if err = os.WriteFile(goFile, []byte("package main"), 0o644); err != nil {
@@ -641,7 +641,7 @@ func TestIndexer_Progress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		root := t.TempDir()
 		content := []byte("package main")
 		goFile := filepath.Join(root, "main.go")
@@ -677,7 +677,7 @@ func TestIndexer_Progress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		root := t.TempDir()
 		txtFile := filepath.Join(root, "doc.txt")
 		if err = os.WriteFile(txtFile, []byte("hello world"), 0o644); err != nil {
@@ -713,7 +713,7 @@ func TestIndexer_Progress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		root := t.TempDir()
 		bigFile := filepath.Join(root, "big.go")
 		if err = os.WriteFile(bigFile, []byte(strings.Repeat("x", 100)), 0o644); err != nil {
@@ -744,7 +744,7 @@ func TestIndexer_Progress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer s.Close()
+		defer func() { _ = s.Close() }()
 		root := t.TempDir()
 		if err = os.WriteFile(filepath.Join(root, "main.go"), []byte("package main"), 0o644); err != nil {
 			t.Fatal(err)
@@ -775,7 +775,7 @@ func TestIndexer_Progress_Concurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	root := t.TempDir()
 	for i := range fileCount {
 		content := fmt.Sprintf("package main\n\nfunc f%d() {}\n", i)
@@ -813,7 +813,7 @@ func TestIndexBatch_CrossFileEmbeddingReuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -870,7 +870,7 @@ func TestIndexBatch_StageBatchBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -928,7 +928,7 @@ func TestIndexBatch_AllChunksFail_SkipsEntireBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()
@@ -990,7 +990,7 @@ func TestIndex_PartialEmbedFailure_SkipsAffectedFilesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	root := t.TempDir()
 	goodPath := filepath.Join(root, "good.go")
@@ -1058,7 +1058,7 @@ func TestIndex_NilProgress_LogsButDoesNotPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	root := t.TempDir()
 	okPath := filepath.Join(root, "ok.go")
@@ -1110,7 +1110,7 @@ func TestIndex_ContinuesAcrossStageBatches_AfterPartialFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	root := t.TempDir()
 	const concurrency = 1
@@ -1178,7 +1178,7 @@ func TestStaleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := t.Context()
 
 	root := t.TempDir()

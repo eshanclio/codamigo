@@ -19,7 +19,7 @@ func setupGraphServer(t *testing.T, opts ...mcp.Option) *mcp.Server {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	rec := func(id, path, name string, start, end int) store.Record {
 		return store.Record{
@@ -73,7 +73,7 @@ func listToolNames(t *testing.T, srv *mcp.Server) map[string]*mcpsdk.Tool {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	t.Cleanup(func() { session.Close() })
+	t.Cleanup(func() { _ = session.Close() })
 
 	res, err := session.ListTools(ctx, nil)
 	if err != nil {
@@ -221,7 +221,7 @@ func TestHandleGetCallers_GraphNotBuilt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	if err = s.Upsert(t.Context(), []store.Record{{
 		ID: "r1", FilePath: "a.go", Language: "go",

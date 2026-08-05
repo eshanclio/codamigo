@@ -24,7 +24,7 @@ func graphFixture(t *testing.T, src string, opts ...indexer.Option) store.Store 
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	root := t.TempDir()
 	if err = os.WriteFile(filepath.Join(root, "main.go"), []byte(src), 0o644); err != nil {
@@ -159,7 +159,7 @@ func TestIndex_ReindexReplacesGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	root := t.TempDir()
 	path := filepath.Join(root, "main.go")

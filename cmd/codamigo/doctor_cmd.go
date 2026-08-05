@@ -119,7 +119,7 @@ func doctorCmd() *cli.Command {
 				if err != nil {
 					fmt.Printf("[FAIL] Store open error: %v\n", err)
 				} else {
-					defer s.Close()
+					defer func() { _ = s.Close() }() // best-effort cleanup; the process is exiting either way
 					stats, err := s.Stats(ctx)
 					if err != nil {
 						fmt.Printf("[FAIL] Stats error: %v\n", err)
@@ -157,7 +157,7 @@ func doctorCmd() *cli.Command {
 				if err != nil {
 					fmt.Printf("[FAIL] Walker error: %v\n", err)
 				} else {
-					defer w.Close()
+					defer func() { _ = w.Close() }() // best-effort cleanup; the process is exiting either way
 					count := 0
 					errCount := 0
 					for _, err := range w.Walk(ctx) {
