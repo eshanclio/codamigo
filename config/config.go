@@ -27,6 +27,16 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
+// MaxLocalSeqLen is the largest token sequence length the local embedding
+// provider accepts. The supported models are BERT-family encoders with 512
+// position embeddings, so a larger value could not be honoured.
+const MaxLocalSeqLen = 512
+
+// localBackends are the accepted values for
+// [Config.EmbeddingLocalBackend]. The leading empty string means "not set",
+// which [Defaults] fills in as "auto"; it is excluded from error messages.
+var localBackends = []string{"", "auto", "go", "xla", "xla:cpu", "xla:cuda"}
+
 // Config holds the unified runtime configuration for codamigo.
 //
 // Configuration is loaded in five layers with later sources winning:
@@ -63,6 +73,23 @@ type Config struct {
 	// EmbeddingHTTPTimeout caps each embedding HTTP request. Default 60s.
 	// Increase for slow local backends; decrease for fast cloud endpoints.
 	EmbeddingHTTPTimeout time.Duration `yaml:"-"`
+	// EmbeddingHFToken authenticates model downloads from HuggingFace. Only
+	// needed for gated or private repositories; the default local model
+	// downloads anonymously.
+	EmbeddingHFToken string `yaml:"embedding_hf_token"`
+	// EmbeddingLocalBackend selects the compute backend for the local embedding
+	// provider: "auto", "go", "xla", "xla:cpu", or "xla:cuda". "auto" tries
+	// xla:cuda, then xla, then go.
+	EmbeddingLocalBackend string `yaml:"embedding_local_backend"`
+	// EmbeddingLocalModelDir overrides the root directory holding downloaded
+	// local models. Empty means $HOME/.codamigo/models (see [ModelsDir]).
+	EmbeddingLocalModelDir string `yaml:"embedding_local_model_dir"`
+	// EmbeddingLocalMaxSeqLen caps the token sequence length fed to the local
+	// model. Longer inputs are truncated, matching sentence_transformers.
+	EmbeddingLocalMaxSeqLen int `yaml:"embedding_local_max_seq_len"`
+	// EmbeddingLocalBatchSize is the largest batch the local embedder submits to
+	// the compute backend in one call.
+	EmbeddingLocalBatchSize int `yaml:"embedding_local_batch_size"`
 	// IncludePatterns limits indexing to files matching these glob patterns.
 	IncludePatterns []string `yaml:"include_patterns"`
 	// ExcludePatterns skips files matching these glob patterns during indexing.
@@ -122,6 +149,11 @@ type fileConfig struct {
 	EmbeddingMaxRetries     int      `yaml:"embedding_max_retries"`
 	EmbeddingRetryBaseDelay string   `yaml:"embedding_retry_base_delay"`
 	EmbeddingHTTPTimeout    string   `yaml:"embedding_http_timeout"`
+	EmbeddingHFToken        string   `yaml:"embedding_hf_token"`
+	EmbeddingLocalBackend   string   `yaml:"embedding_local_backend"`
+	EmbeddingLocalModelDir  string   `yaml:"embedding_local_model_dir"`
+	EmbeddingLocalMaxSeqLen int      `yaml:"embedding_local_max_seq_len"`
+	EmbeddingLocalBatchSize int      `yaml:"embedding_local_batch_size"`
 	IncludePatterns         []string `yaml:"include_patterns"`
 	ExcludePatterns         []string `yaml:"exclude_patterns"`
 	ProjectRoot             string   `yaml:"project_root"`
@@ -192,6 +224,11 @@ func (fc *fileConfig) toConfig() (*Config, error) {
 		EmbeddingMaxRetries:     fc.EmbeddingMaxRetries,
 		EmbeddingRetryBaseDelay: retryDelay,
 		EmbeddingHTTPTimeout:    httpTimeout,
+		EmbeddingHFToken:        fc.EmbeddingHFToken,
+		EmbeddingLocalBackend:   fc.EmbeddingLocalBackend,
+		EmbeddingLocalModelDir:  fc.EmbeddingLocalModelDir,
+		EmbeddingLocalMaxSeqLen: fc.EmbeddingLocalMaxSeqLen,
+		EmbeddingLocalBatchSize: fc.EmbeddingLocalBatchSize,
 		IncludePatterns:         fc.IncludePatterns,
 		ExcludePatterns:         fc.ExcludePatterns,
 		ProjectRoot:             fc.ProjectRoot,
@@ -221,6 +258,12 @@ func Defaults() *Config {
 		EmbeddingMaxRetries:     3,
 		EmbeddingRetryBaseDelay: 500 * time.Millisecond,
 		EmbeddingHTTPTimeout:    60 * time.Second,
+		// EmbeddingLocalModelDir is deliberately left empty: resolving it needs
+		// the home directory, which can fail, and Defaults returns no error.
+		// Callers resolve it through [ModelsDir] instead.
+		EmbeddingLocalBackend:   "auto",
+		EmbeddingLocalMaxSeqLen: 512,
+		EmbeddingLocalBatchSize: 32,
 		WatchMode:               "auto",
 		PollInterval:            5 * time.Second,
 		DebounceWindow:          500 * time.Millisecond,
@@ -282,6 +325,20 @@ func ProjectDataDir(projectRoot string) (string, error) {
 		return "", fmt.Errorf("determining home directory: %w", err)
 	}
 	return filepath.Join(home, ".codamigo", "projects", ProjectHash(projectRoot)), nil
+}
+
+// ModelsDir returns the root directory for downloaded local embedding models:
+// $HOME/.codamigo/models. Callers must create it with os.MkdirAll before
+// writing files into it.
+//
+// Like [ProjectDataDir] this does not honor XDG_CONFIG_HOME — these are data
+// files, not configuration.
+func ModelsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("determining home directory: %w", err)
+	}
+	return filepath.Join(home, ".codamigo", "models"), nil
 }
 
 // DefaultStorePath returns the default SQLite store path for the project at
@@ -383,6 +440,21 @@ func (c *Config) Merge(o *Config) *Config {
 	if o.EmbeddingHTTPTimeout != 0 {
 		out.EmbeddingHTTPTimeout = o.EmbeddingHTTPTimeout
 	}
+	if o.EmbeddingHFToken != "" {
+		out.EmbeddingHFToken = o.EmbeddingHFToken
+	}
+	if o.EmbeddingLocalBackend != "" {
+		out.EmbeddingLocalBackend = o.EmbeddingLocalBackend
+	}
+	if o.EmbeddingLocalModelDir != "" {
+		out.EmbeddingLocalModelDir = o.EmbeddingLocalModelDir
+	}
+	if o.EmbeddingLocalMaxSeqLen != 0 {
+		out.EmbeddingLocalMaxSeqLen = o.EmbeddingLocalMaxSeqLen
+	}
+	if o.EmbeddingLocalBatchSize != 0 {
+		out.EmbeddingLocalBatchSize = o.EmbeddingLocalBatchSize
+	}
 	if o.IncludePatterns != nil {
 		out.IncludePatterns = slices.Clone(o.IncludePatterns)
 	}
@@ -469,6 +541,23 @@ func (c *Config) Validate() error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			errs = append(errs, fmt.Errorf("EmbeddingBaseURL %q is not a valid HTTP(S) URL", c.EmbeddingBaseURL))
 		}
+	}
+	// Note there is deliberately no allow-list for EmbeddingProvider. Only
+	// "local" is special-cased at construction time; every other value routes to
+	// the OpenAI-compatible client, so a closed list would break configs naming
+	// providers like "voyage".
+	if !slices.Contains(localBackends, c.EmbeddingLocalBackend) {
+		errs = append(errs, fmt.Errorf("EmbeddingLocalBackend %q is not valid (use %s)",
+			c.EmbeddingLocalBackend, strings.Join(localBackends[1:], ", ")))
+	}
+	if c.EmbeddingLocalMaxSeqLen < 0 {
+		errs = append(errs, errors.New("EmbeddingLocalMaxSeqLen must not be negative"))
+	} else if c.EmbeddingLocalMaxSeqLen > MaxLocalSeqLen {
+		errs = append(errs, fmt.Errorf("EmbeddingLocalMaxSeqLen %d exceeds the maximum supported %d",
+			c.EmbeddingLocalMaxSeqLen, MaxLocalSeqLen))
+	}
+	if c.EmbeddingLocalBatchSize < 0 {
+		errs = append(errs, errors.New("EmbeddingLocalBatchSize must not be negative"))
 	}
 	return errors.Join(errs...)
 }

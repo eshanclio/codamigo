@@ -13,8 +13,10 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/ieshan/codamigo/config"
+	"github.com/ieshan/codamigo/localembed"
 	"github.com/ieshan/codamigo/walker"
 	"github.com/ieshan/go-code-chunker/langs"
+	"github.com/ieshan/go-embedder"
 )
 
 func doctorCmd() *cli.Command {
@@ -84,7 +86,21 @@ func doctorCmd() *cli.Command {
 				return fmt.Errorf("loading config: %w", err)
 			}
 
-			// ── 3. Store ───────────────────────────────────────────────────────
+			// Build the embedder before the store, because the store must be
+			// opened with the embedder's dimension, not the configured one — see
+			// storeDim. Failing to construct is non-fatal so every later section
+			// still reports.
+			emb, embErr := newEmbedder(cfg, roleQuery)
+			if embErr != nil {
+				fmt.Printf("[FAIL] Invalid embedder config: %v\n", embErr)
+			} else {
+				defer closeEmbedder(emb)
+			}
+
+			// ── 3. Provider ────────────────────────────────────────────────────
+			reportProvider(cfg, emb)
+
+			// ── 4. Store ───────────────────────────────────────────────────────
 			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
 			if err != nil {
 				return fmt.Errorf("resolving store path: %w", err)
@@ -97,9 +113,9 @@ func doctorCmd() *cli.Command {
 				fmt.Printf("[FAIL] Store not found — run 'codamigo index'\n")
 			}
 
-			// ── 4. Index stats (only if store exists) ──────────────────────────
+			// ── 5. Index stats (only if store exists) ──────────────────────────
 			if storeExists {
-				s, err := buildStore(storePath, cfg.EmbeddingModel, cfg.EmbeddingDimensions)
+				s, err := buildStore(storePath, cfg.EmbeddingModel, storeDim(emb, cfg))
 				if err != nil {
 					fmt.Printf("[FAIL] Store open error: %v\n", err)
 				} else {
@@ -131,7 +147,7 @@ func doctorCmd() *cli.Command {
 				}
 			}
 
-			// ── 5. Walker preview ──────────────────────────────────────────────
+			// ── 6. Walker preview ──────────────────────────────────────────────
 			// Uses the same filter construction as buildComponents so this count
 			// matches what "codamigo index" actually processes. Keep in sync if
 			// the language selection in buildComponents ever changes.
@@ -159,22 +175,94 @@ func doctorCmd() *cli.Command {
 				}
 			}
 
-			// ── 6. Embedding smoke-test ────────────────────────────────────────
-			if !quick {
-				emb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
-				if err != nil {
-					fmt.Printf("[FAIL] Invalid embedder config: %v\n", err)
-					return nil
-				}
+			// ── 7. Embedding smoke-test ────────────────────────────────────────
+			// For the local provider this is pure computation: New already loaded
+			// the weights, so there is nothing to reach over the network.
+			if !quick && embErr == nil {
 				vec, err := emb.Embed(ctx, "codamigo doctor test")
-				if err != nil {
+				switch {
+				case err != nil && cfg.EmbeddingProvider == localProvider:
+					fmt.Printf("[FAIL] Local embedding failed: %v\n", err)
+				case err != nil:
 					fmt.Printf("[FAIL] Embedding model unreachable: %v\n", err)
-				} else {
+				case cfg.EmbeddingProvider == localProvider:
+					fmt.Printf("[OK]  Local embedding works (model: %s, dims: %d)\n", cfg.EmbeddingModel, len(vec))
+				default:
 					fmt.Printf("[OK]  Embedding model reachable (model: %s, dims: %d)\n", cfg.EmbeddingModel, len(vec))
 				}
 			}
 
 			return nil
 		},
+	}
+}
+
+// storeDim returns the embedding dimensionality to validate the store against.
+//
+// The embedder's own dimension wins: for the local provider the model, not the
+// config, is the source of truth, and config.Defaults() sets 1536 — so using the
+// configured value made doctor report a spurious "[FAIL] Store open error" for
+// any 384-dimensional local model. Falls back to the configured value when the
+// embedder could not be constructed, so doctor can still report on the store.
+func storeDim(emb embedder.Embedder, cfg *config.Config) int {
+	if emb != nil {
+		return emb.Dim()
+	}
+	return cfg.EmbeddingDimensions
+}
+
+// reportProvider prints the embedding provider section, including the local
+// provider's model directory and resolved compute backend. Each gap prints the
+// command that fixes it.
+func reportProvider(cfg *config.Config, emb embedder.Embedder) {
+	if cfg.EmbeddingProvider != localProvider {
+		fmt.Printf("[OK]  Provider: %s (remote API at %s)\n", cfg.EmbeddingProvider, cfg.EmbeddingBaseURL)
+		if cfg.EmbeddingAPIKey == "" {
+			fmt.Printf("[WARN] No API key set; most remote providers require one\n")
+		}
+		return
+	}
+
+	fmt.Printf("[OK]  Provider: local (in-process, no network)\n")
+
+	model, err := localembed.Lookup(cfg.EmbeddingModel)
+	if err != nil {
+		fmt.Printf("[FAIL] Model: %v\n", err)
+		return
+	}
+	fmt.Printf("       Model: %s (%s)\n", model.DisplayName(), model.RepoID)
+	if !model.Pinned() {
+		fmt.Printf("[WARN] %s is not a built-in model, so its files are not checksum-verified\n", model.DisplayName())
+	}
+
+	root, err := localModelsRoot(cfg)
+	if err != nil {
+		fmt.Printf("[FAIL] Models directory: %v\n", err)
+		return
+	}
+	if dir, err := localembed.ModelDir(root, model); err == nil {
+		if missing, err := localembed.MissingFiles(dir, model); err == nil && len(missing) == 0 {
+			fmt.Printf("[OK]  Model files present: %s\n", dir)
+		} else {
+			warnIfModelMissing(root, model)
+		}
+	}
+
+	if cfg.EmbeddingHFToken != "" {
+		fmt.Printf("       HuggingFace token: set (only needed for gated models)\n")
+	}
+
+	local, ok := emb.(*localembed.Embedder)
+	if !ok {
+		return
+	}
+	fmt.Printf("       Max sequence length: %d tokens (longer chunks are truncated)\n", local.MaxSeqLen())
+	if local.BackendName() == "go" {
+		// Worth shouting about: measured at 3.5 embeddings/sec versus 44 on XLA,
+		// which is the difference between a usable and an unusable index run.
+		fmt.Printf("[WARN] Compute backend: go (pure Go, ~12x slower than XLA)\n")
+		fmt.Printf("       Install the faster backend with: codamigo download-model --xla\n")
+	} else {
+		fmt.Printf("[OK]  Compute backend: %s\n", local.BackendName())
 	}
 }

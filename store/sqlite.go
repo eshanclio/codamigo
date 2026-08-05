@@ -228,7 +228,7 @@ func (s *sqliteStore) validateSchema(ctx context.Context, embeddingModel string,
 	}
 	current, _ := strconv.Atoi(schemaVersion) // schemaVersion is a package constant
 	if stored != current {
-		return fmt.Errorf("database schema version %s does not match current version %s; re-index required — delete the DB file and re-run", storedVersion, schemaVersion)
+		return fmt.Errorf("database schema version %s does not match current version %s; re-index required — run 'codamigo reset' then 'codamigo index'", storedVersion, schemaVersion)
 	}
 
 	row = s.reader.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key = 'embedding_model'")
@@ -242,7 +242,7 @@ func (s *sqliteStore) validateSchema(ctx context.Context, embeddingModel string,
 	}
 
 	if storedModel != embeddingModel {
-		return fmt.Errorf("embedding model changed from %q to %q; re-index required — delete the DB file and re-run", storedModel, embeddingModel)
+		return fmt.Errorf("embedding model changed from %q to %q; re-index required — run 'codamigo reset' then 'codamigo index'", storedModel, embeddingModel)
 	}
 
 	dim, err := strconv.Atoi(storedDim)
@@ -250,7 +250,7 @@ func (s *sqliteStore) validateSchema(ctx context.Context, embeddingModel string,
 		return fmt.Errorf("parsing embedding_dim %q: %w", storedDim, err)
 	}
 	if dim != embeddingDim {
-		return fmt.Errorf("embedding dimension changed from %d to %d; re-index required — delete the DB file and re-run", dim, embeddingDim)
+		return fmt.Errorf("embedding dimension changed from %d to %d; re-index required — run 'codamigo reset' then 'codamigo index'", dim, embeddingDim)
 	}
 
 	return nil

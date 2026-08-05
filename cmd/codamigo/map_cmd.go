@@ -39,10 +39,11 @@ func mapCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			emb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
+			emb, err := newEmbedder(cfg, roleQuery)
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
+			defer closeEmbedder(emb)
 			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
 			if err != nil {
 				return fmt.Errorf("resolving store path: %w", err)

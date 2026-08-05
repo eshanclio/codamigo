@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/ieshan/codamigo/config"
 	"github.com/ieshan/codamigo/indexer"
+	"github.com/ieshan/codamigo/localembed"
 	"github.com/ieshan/codamigo/mcp"
 	"github.com/ieshan/codamigo/query"
 	"github.com/ieshan/codamigo/store"
@@ -22,6 +25,7 @@ import (
 	"github.com/ieshan/codamigo/watcher"
 	"github.com/ieshan/go-code-chunker/chunker"
 	"github.com/ieshan/go-code-chunker/langs"
+	"github.com/ieshan/go-embedder"
 	"github.com/ieshan/go-embedder/openai"
 )
 
@@ -34,9 +38,20 @@ var commonFlags = []cli.Flag{
 		Sources: cli.EnvVars("CODAMIGO_API_KEY"),
 	},
 	&cli.StringFlag{
+		Name:    "provider",
+		Usage:   "embedding provider (\"local\" runs in-process; anything else is an OpenAI-compatible API)",
+		Sources: cli.EnvVars("CODAMIGO_PROVIDER"),
+	},
+	&cli.StringFlag{
 		Name:    "model",
 		Usage:   "embedding model name",
 		Sources: cli.EnvVars("CODAMIGO_MODEL"),
+	},
+	&cli.StringFlag{
+		Name:  "hf-token",
+		Usage: "HuggingFace token, only needed for gated or private models",
+		// HF_TOKEN is the conventional name, so honour it as a fallback.
+		Sources: cli.EnvVars("CODAMIGO_HF_TOKEN", "HF_TOKEN"),
 	},
 	&cli.StringFlag{
 		Name:    "base-url",
@@ -83,6 +98,7 @@ func main() {
 			serveCmd(),
 			resetCmd(),
 			doctorCmd(),
+			downloadModelCmd(),
 		},
 	}
 	if err := cmd.Run(ctx, os.Args); err != nil {
@@ -101,10 +117,11 @@ func indexCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			emb, err := newEmbedder(cfg, cfg.EmbeddingIndexInputType)
+			emb, err := newEmbedder(cfg, roleDocument)
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
+			defer closeEmbedder(emb)
 			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
 			if err != nil {
 				return fmt.Errorf("resolving store path: %w", err)
@@ -201,10 +218,13 @@ func serveCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
-			indexEmb, err := newEmbedder(cfg, cfg.EmbeddingIndexInputType)
+			indexEmb, err := newEmbedder(cfg, roleDocument)
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
+			// indexEmb owns the model; queryEmb below is a view over it, so
+			// closing indexEmb drains queries too.
+			defer closeEmbedder(indexEmb)
 			storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
 			if err != nil {
 				return fmt.Errorf("resolving store path: %w", err)
@@ -215,10 +235,11 @@ func serveCmd() *cli.Command {
 			}
 			defer s.Close()
 			defer w.Close()
-			queryEmb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
+			queryEmb, err := queryEmbedderFor(cfg, indexEmb)
 			if err != nil {
 				return fmt.Errorf("creating embedder: %w", err)
 			}
+			defer closeEmbedder(queryEmb)
 			q := query.New(queryEmb, s)
 			idx := indexer.New(c, indexEmb, s, w,
 				indexer.WithConcurrency(cfg.IndexConcurrency),
@@ -334,6 +355,12 @@ func flagsToConfig(cmd *cli.Command) *config.Config {
 	if cmd.IsSet("api-key") {
 		cfg.EmbeddingAPIKey = cmd.String("api-key")
 	}
+	if cmd.IsSet("provider") {
+		cfg.EmbeddingProvider = cmd.String("provider")
+	}
+	if cmd.IsSet("hf-token") {
+		cfg.EmbeddingHFToken = cmd.String("hf-token")
+	}
 	if cmd.IsSet("model") {
 		cfg.EmbeddingModel = cmd.String("model")
 	}
@@ -401,8 +428,40 @@ func buildComponents(cfg *config.Config, storePath string, dim int) (*chunker.Ch
 	return c, s, w, nil
 }
 
-func newEmbedder(cfg *config.Config, inputType string) (*openai.Client, error) {
-	return openai.New(openai.Options{
+// localProvider is the one embedding_provider value that is special-cased.
+// Every other value — including "voyage" — routes to the OpenAI-compatible
+// client, so adding a provider name never requires a code change here.
+const localProvider = "local"
+
+// embedderRole says which side of the index/query split an embedder serves.
+//
+// It is an explicit parameter rather than being inferred from the input-type
+// string, because both embedding_index_input_type and
+// embedding_query_input_type default to empty and would be indistinguishable.
+type embedderRole int
+
+const (
+	roleDocument embedderRole = iota
+	roleQuery
+)
+
+// newEmbedder builds the embedder for cfg's provider.
+//
+// The return type is the interface, so the local provider can be substituted
+// without touching any call site: they only use Dim() and the Embed methods, and
+// query.New/indexer.New already take embedder.Embedder.
+//
+// Callers must pair this with closeEmbedder — the local provider holds a compute
+// backend and compiled graphs that are not garbage-collected.
+func newEmbedder(cfg *config.Config, role embedderRole) (embedder.Embedder, error) {
+	if cfg.EmbeddingProvider == localProvider {
+		return newLocalEmbedder(cfg, role)
+	}
+	inputType := cfg.EmbeddingIndexInputType
+	if role == roleQuery {
+		inputType = cfg.EmbeddingQueryInputType
+	}
+	client, err := openai.New(openai.Options{
 		BaseURL:        cfg.EmbeddingBaseURL,
 		APIKey:         cfg.EmbeddingAPIKey,
 		Model:          cfg.EmbeddingModel,
@@ -416,6 +475,81 @@ func newEmbedder(cfg *config.Config, inputType string) (*openai.Client, error) {
 		Concurrency:    cfg.IndexConcurrency,
 		HTTPTimeout:    cfg.EmbeddingHTTPTimeout,
 	})
+	if err != nil {
+		// Return an untyped nil, not the typed nil *openai.Client: `return
+		// openai.New(...)` would hand back a non-nil interface wrapping a nil
+		// pointer, so a caller's `emb != nil` guard would pass and then panic on
+		// the first method call. Same trap as the Progress conversion in indexCmd.
+		return nil, err
+	}
+	return client, nil
+}
+
+// newLocalEmbedder constructs the in-process GoMLX embedder, applying the
+// model's query instruction prefix on the query side only.
+func newLocalEmbedder(cfg *config.Config, role embedderRole) (embedder.Embedder, error) {
+	root, err := localModelsRoot(cfg)
+	if err != nil {
+		return nil, err
+	}
+	emb, err := localembed.New(localembed.Options{
+		Model:      cfg.EmbeddingModel,
+		ModelsRoot: root,
+		Backend:    cfg.EmbeddingLocalBackend,
+		MaxSeqLen:  cfg.EmbeddingLocalMaxSeqLen,
+		BatchSize:  cfg.EmbeddingLocalBatchSize,
+		Dimensions: cfg.EmbeddingDimensions,
+		// ApplyQueryPrefix rather than WithPrefix: a WithPrefix view does not own
+		// Close, so returning one here would leave the caller's
+		// defer closeEmbedder a no-op and the compute backend never finalized.
+		ApplyQueryPrefix: role == roleQuery,
+	})
+	if err != nil {
+		return nil, err // untyped nil: see the note in newEmbedder
+	}
+	return emb, nil
+}
+
+// localModelsRoot resolves where downloaded models live: the configured
+// override, else $HOME/.codamigo/models.
+func localModelsRoot(cfg *config.Config) (string, error) {
+	if cfg.EmbeddingLocalModelDir != "" {
+		abs, err := filepath.Abs(cfg.EmbeddingLocalModelDir)
+		if err != nil {
+			return "", fmt.Errorf("resolving embedding_local_model_dir: %w", err)
+		}
+		return abs, nil
+	}
+	root, err := config.ModelsDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving models directory: %w", err)
+	}
+	return root, nil
+}
+
+// closeEmbedder releases native resources held by embedders that own them.
+// The local GoMLX embedder holds a compute backend and compiled graphs; the
+// HTTP embedder holds nothing, so this is a no-op for it.
+func closeEmbedder(e embedder.Embedder) {
+	if c, ok := e.(io.Closer); ok {
+		if err := c.Close(); err != nil {
+			slog.Warn("closing embedder", slog.Any("error", err))
+		}
+	}
+}
+
+// queryEmbedderFor returns the query-side embedder to pair with a document-side
+// one that has already been built.
+//
+// For the local provider this is a view over the same weights, which is what
+// keeps `serve` from holding two copies of the model — and, because the view
+// shares the concurrency limit, what makes the owner's Close cover in-flight
+// queries. Its Close is a no-op, so the caller may defer closeEmbedder on both.
+func queryEmbedderFor(cfg *config.Config, document embedder.Embedder) (embedder.Embedder, error) {
+	if local, ok := document.(*localembed.Embedder); ok {
+		return local.WithPrefix(local.QueryPrefix()), nil
+	}
+	return newEmbedder(cfg, roleQuery)
 }
 
 // safeConfigPath validates that userPath does not escape the base directory.

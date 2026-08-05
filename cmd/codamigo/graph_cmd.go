@@ -93,10 +93,11 @@ func runGraphQuery(
 		return errors.New("code graph is disabled; remove enable_graph: false from settings to use this command")
 	}
 
-	emb, err := newEmbedder(cfg, cfg.EmbeddingQueryInputType)
+	emb, err := newEmbedder(cfg, roleQuery)
 	if err != nil {
 		return fmt.Errorf("creating embedder: %w", err)
 	}
+	defer closeEmbedder(emb)
 	storePath, err := config.DefaultStorePath(cfg.ProjectRoot)
 	if err != nil {
 		return fmt.Errorf("resolving store path: %w", err)

@@ -11,13 +11,13 @@ codamigo runs a four-stage pipeline:
 
 - **Walk** — recursive filesystem walk with `.gitignore` / `.caignore` and include/exclude glob filtering
 - **Chunk** — tree-sitter AST-based splitting into semantically coherent units (functions, classes, declarations), which also extracts the graph edges between them (calls, imports, inheritance, type references)
-- **Embed** — each chunk is converted to a float32 vector via any OpenAI-compatible embedding API
+- **Embed** — each chunk is converted to a float32 vector, either in-process with a local model (no network, no API key) or via any OpenAI-compatible embedding API
 - **Search** — queries are embedded and matched against the store using hybrid KNN + BM25 (Reciprocal Rank Fusion), backed by sqlite-vec and FTS5
 
 Alongside search, the extracted graph answers relationship questions — who calls a symbol, what it
 references, and what a change to it would affect — without an embedding call.
 
-The index lives in a single `.codamigo/store.db` file in your project. No external services are required — any local embedding server (Ollama, LM Studio) works.
+The index lives in a single `.codamigo/store.db` file in your project. No external services are required: set `embedding_provider: local` to run the embedding model in-process, or point codamigo at any local embedding server (Ollama, LM Studio).
 
 ## Installation
 
@@ -37,6 +37,13 @@ codamigo index           # walk + chunk + embed + store
 codamigo search "query"  # semantic search, prints top 10 results
 codamigo map             # structural map of packages, files, and symbols
 codamigo serve           # start MCP stdio server for AI assistant integration
+```
+
+To run entirely offline with no API key, pick `local` at the `init` provider prompt (or set
+`embedding_provider: local`) and fetch the model once:
+
+```sh
+codamigo download-model --xla   # ~133 MB of weights plus the faster compute plugin
 ```
 
 ## Usage modes
@@ -82,7 +89,7 @@ codamigo serve
 
 ### `codamigo init`
 
-Guided first-time setup. Prompts for embedding base URL, model, and API key. Writes `~/.codamigo/global_settings.yml` and `.codamigo/settings.yml` (if absent). Appends `.codamigo/` to `.gitignore`. Runs a smoke-test against the embedding model.
+Guided first-time setup. Prompts for the embedding provider, then for the settings that provider needs — base URL, model, and API key for a remote API, or model and optional HuggingFace token for `local`. Writes `~/.codamigo/global_settings.yml` (mode `0600`) and `.codamigo/settings.yml` (if absent). Appends `.codamigo/` to `.gitignore`. Runs a smoke-test against the embedding model; on the local provider it tells you to run `download-model` first if the weights are missing.
 
 No flags. Reads from stdin interactively.
 
@@ -98,9 +105,11 @@ When stderr is a TTY, a live 2-line progress display shows running processed/ski
 
 | Flag | Env var | Default | Purpose |
 |------|---------|---------|---------|
+| `--provider` | `CODAMIGO_PROVIDER` | `openai` | `local` runs the model in-process; any other value is an OpenAI-compatible API |
 | `--api-key` | `CODAMIGO_API_KEY` | — | Embedding API key |
 | `--model` | `CODAMIGO_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `--base-url` | `CODAMIGO_BASE_URL` | `https://api.openai.com/v1` | Embedding API base URL |
+| `--hf-token` | `CODAMIGO_HF_TOKEN`, `HF_TOKEN` | — | HuggingFace token; only for gated or private local models |
 | `--project-root` | `CODAMIGO_PROJECT_ROOT` | current directory | Root directory to index |
 | `--dimensions` | `CODAMIGO_DIMENSIONS` | `1536` | Embedding vector dimensions |
 | `--global-config` | `CODAMIGO_GLOBAL_CONFIG` | `~/.codamigo/global_settings.yml` | Path to global config |
@@ -226,11 +235,122 @@ Deletes the vector store database file. Prompts for confirmation unless `--force
 
 ### `codamigo doctor`
 
-Diagnoses configuration, store health, and embedding model reachability. Reports: global config, project config, store file existence, index stats (chunks, files, per-language counts), walker file count, embedding smoke-test.
+Diagnoses configuration, store health, and embedding model reachability. Reports: global config, project config, embedding provider, store file existence, index stats (chunks, files, per-language counts), walker file count, embedding smoke-test.
+
+On the local provider it also reports the model directory, whether every model file is present, the token limit, and which compute backend was selected — printing the exact `download-model` command for anything missing.
 
 | Flag | Purpose |
 |------|---------|
 | `--quick` | Skip the live embedding smoke-test |
+
+### `codamigo download-model`
+
+Downloads a local embedding model from HuggingFace into `~/.codamigo/models` and verifies every file against a pinned SHA256 for a pinned revision. **No HuggingFace token is needed for the built-in models.**
+
+```bash
+codamigo download-model                      # the default model, bge-small-en-v1.5
+codamigo download-model --xla                # also install the faster XLA compute plugin
+codamigo download-model --model all-MiniLM-L6-v2
+```
+
+| Flag | Purpose |
+|------|---------|
+| `--model` | Registry short name or a HuggingFace repository id |
+| `--xla` | Also install the XLA (PJRT) compute plugin — 12–25× faster than pure Go |
+| `--cuda 12` / `--cuda 13` | Install the CUDA PJRT plugin (linux/amd64 only) |
+| `--plugin-only` | Install the compute plugin without downloading a model |
+| `--force` | Re-download files that are already present and verified |
+| `--hf-token` | HuggingFace token; only needed for gated or private models |
+
+Re-running is a no-op: files already present with a matching size and hash are skipped. A file that fails verification is deleted before the error is reported, so a retry starts clean.
+
+---
+
+## Local embedding (no API key, no network)
+
+Set `embedding_provider: local` to run the embedding model in-process via [GoMLX](https://github.com/gomlx/gomlx). Nothing leaves the machine, there is no API key, and there is no per-token cost.
+
+```bash
+codamigo download-model --xla     # once: ~133 MB of weights + the compute plugin
+```
+
+```yaml
+# ~/.codamigo/global_settings.yml
+embedding_provider: local
+embedding_model: bge-small-en-v1.5
+embedding_dimensions: 384
+```
+
+```bash
+codamigo reset && codamigo index  # the store records its vector width, so switching
+                                  # providers needs a re-index
+```
+
+### Built-in models
+
+| Model | Dimensions | Size | Notes |
+|-------|-----------:|-----:|-------|
+| `bge-small-en-v1.5` (default) | 384 | 133 MB | Asymmetric: applies a query instruction prefix to searches but not to indexed code |
+| `all-MiniLM-L6-v2` | 384 | 91 MB | Symmetric: queries and documents are embedded identically |
+
+Both are pinned to a fixed revision with per-file checksums, which is what makes `download-model` reproducible rather than just a corruption check.
+
+Any HuggingFace sentence-transformers repository id also works (`embedding_model: some-org/some-model`), but it is **not** checksum-verified, tracks `main`, and requires you to set `embedding_dimensions` yourself. Not every architecture loads: `nomic-ai/nomic-embed-text-v1.5`, for instance, is rejected by the current go-huggingface loader.
+
+### Compute backends and speed
+
+| Backend | Platform | Speed |
+|---------|----------|-------|
+| `xla:cuda` | linux/amd64 + NVIDIA GPU | Fastest |
+| `xla` / `xla:cpu` | linux, macOS, Windows | 12–25× faster than pure Go |
+| `go` | everywhere, no plugin needed | Correctness fallback; too slow to index with |
+
+`auto` (the default) tries `xla:cuda`, then `xla`, then `go`. Measured on an M-series Mac with `bge-small-en-v1.5` at batch 8, steady state (graph compilation excluded, since it happens once per shape per process), in embeddings/second:
+
+| Sequence length | `go` | `xla` | speedup |
+|----------------:|-----:|------:|--------:|
+| 32 | 7.5 | 186.6 | 25× |
+| 128 | 3.5 | 51.8 | 15× |
+| 256 | 1.5 | 18.2 | 12× |
+| 512 | 0.5 | 7.0 | 15× |
+
+Reproduce with `make bench-localembed`, which needs the model downloaded.
+
+Install the XLA plugin with `codamigo download-model --xla`. **If `codamigo doctor` reports `Compute backend: go`, indexing will be roughly 12× slower** — the plugin install did not take. macOS has no GPU path (there is no Metal PJRT plugin), but XLA-CPU makes it perfectly usable.
+
+codamigo never downloads a compute plugin implicitly: it sets `GOMLX_NO_AUTO_INSTALL=1`, so a missing plugin falls back to `go` rather than pausing an index run for a network fetch. Note that unlike the model weights, the plugin download is *not* checksum-verified — that gap is upstream in go-xla.
+
+### Memory
+
+Expect roughly 1 GB of resident memory during indexing on the XLA backend: the compiled graphs and the model weights live in device buffers. This plateaus — it does not grow with the number of files.
+
+### Cache layout
+
+```
+~/.codamigo/models/
+└── bge-small-en-v1.5/                       # one directory per model
+    └── models--BAAI--bge-small-en-v1.5/     # go-huggingface's internal layout
+        ├── blobs/  info/
+        └── snapshots/<revision>/
+            ├── model.safetensors  config.json  tokenizer.json
+            └── modules.json       1_Pooling/config.json
+```
+
+Removing a model is `rm -rf ~/.codamigo/models/<model-name>`.
+
+---
+
+## Docker images
+
+Both images need CGo (tree-sitter and sqlite3), so both build from a toolchain stage with `libsqlite3-dev`. Model weights are **not** baked in — mount the cache instead.
+
+```bash
+make docker
+docker run --rm -v ~/.codamigo/models:/root/.codamigo/models \
+    -v "$PWD:/work" codamigo:cpu doctor
+```
+
+`Dockerfile.cuda` builds a GPU image that bakes the CUDA PJRT plugin in at build time. It is **unverified** — it needs a linux/amd64 host with an NVIDIA GPU, which the machine it was written on does not have. See the comments at the top of the file for the first things to check.
 
 ---
 
@@ -252,13 +372,21 @@ built-in defaults
 
 ```yaml
 # Embedding provider
-embedding_provider: openai            # informational label only
+embedding_provider: openai            # "local" runs in-process; any other value is
+                                      # an OpenAI-compatible HTTP API
 embedding_model: text-embedding-3-small
 embedding_api_key: sk-...             # use CODAMIGO_API_KEY env var instead
 embedding_base_url: https://api.openai.com/v1
 embedding_dimensions: 1536
 embedding_index_input_type: ""        # e.g. "document" for Voyage AI
 embedding_query_input_type: ""        # e.g. "query" for Voyage AI
+
+# Local embedding provider (only used when embedding_provider: local)
+embedding_local_backend: auto         # "auto" | "go" | "xla" | "xla:cpu" | "xla:cuda"
+embedding_local_model_dir: ""         # defaults to ~/.codamigo/models
+embedding_local_max_seq_len: 512      # tokens; longer chunks are truncated
+embedding_local_batch_size: 32        # largest batch sent to the compute backend
+embedding_hf_token: ""                # only for gated/private HuggingFace models
 
 # Rate limiting and retries
 embedding_max_batch_size: 256
@@ -296,7 +424,7 @@ poll_interval: "5s"
 debounce_window: "500ms"
 ```
 
-Keep `embedding_api_key` in the global config (written with mode `0600` by `init`) or in `CODAMIGO_API_KEY`. Do not put API keys in the project config.
+Keep `embedding_api_key` in the global config (written with mode `0600` by `init`) or in `CODAMIGO_API_KEY`. Do not put API keys in the project config. The same applies to `embedding_hf_token`.
 
 ### Docker
 
@@ -314,6 +442,10 @@ poll_interval: "2s"
 ```
 
 ## Embedding providers
+
+`embedding_provider: local` is the only value that changes behaviour — it selects the in-process
+model described under [Local embedding](#local-embedding-no-api-key-no-network). Every other value,
+including `voyage`, routes to the OpenAI-compatible HTTP client, so the label is informational there.
 
 ### OpenAI
 

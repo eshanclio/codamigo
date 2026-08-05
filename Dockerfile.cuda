@@ -1,0 +1,74 @@
+# CUDA image, for the GPU path of the local embedding provider.
+#
+# UNVERIFIED. This file was written against go-xla v0.4.1's CUDA installer and
+# NVIDIA's published runtime images, but it has not been built or run: doing so
+# needs a linux/amd64 host with an NVIDIA GPU, and the machine this was developed
+# on is macOS/arm64, where Docker correctly reports no CUDA device. Treat the base
+# image tag, the cuDNN package name, and the plugin path as the first things to
+# check if the build fails.
+#
+# The builder stage below IS verified, indirectly: it is the same as Dockerfile's,
+# which was built and run. Everything from the CUDA runtime stage down is not.
+#
+#   docker build -f Dockerfile.cuda -t codamigo:cuda .
+#   docker run --rm --gpus all \
+#       -v ~/.codamigo/models:/root/.codamigo/models \
+#       codamigo:cuda doctor
+#
+# Expect doctor to report "Compute backend: xla:cuda". If it reports "go", the
+# plugin was not found and throughput will be roughly 12x worse.
+#
+# CUDA is linux/amd64 only — go-xla's CudaAutoInstall is a no-op on every other
+# platform, so this image is not multi-arch.
+
+FROM golang:1.26.5-bookworm AS builder
+
+ENV CGO_ENABLED=1
+
+# libsqlite3-dev supplies sqlite3.h for sqlite-vec's C sources. Confirmed
+# necessary by building the CPU image, which fails without it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN go build -tags sqlite_fts5 -o /out/codamigo ./cmd/codamigo/
+
+# Bake the PJRT CUDA plugin in at build time so the runtime image never reaches
+# for PyPI or GitHub.
+#
+# --cuda rather than --xla: AutoInstall's CUDA path self-gates on a *visible*
+# NVIDIA GPU, which there is not during `docker build`, so it would silently
+# install nothing. --plugin-only skips the model download, which is mounted at
+# runtime instead.
+RUN /out/codamigo download-model --cuda 13 --plugin-only
+
+FROM nvidia/cuda:13.0.1-runtime-ubuntu24.04
+
+# libcudnn9 is not in the runtime image and the XLA CUDA plugin needs it. The
+# nvidia-* wheels the installer pulls may already cover parts of this; slim the
+# list down once this has actually been built on a GPU host.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgomp1 \
+        libcudnn9-cuda-13 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Point GoMLX at the baked-in plugin and forbid any runtime download.
+ENV PJRT_PLUGIN_LIBRARY_PATH=/opt/pjrt
+ENV GOMLX_NO_AUTO_INSTALL=1
+
+COPY --from=builder /out/codamigo /usr/local/bin/codamigo
+COPY --from=builder /root/.local/lib/go-xla/ /opt/pjrt/
+
+WORKDIR /work
+
+ENTRYPOINT ["codamigo"]
+CMD ["doctor"]
