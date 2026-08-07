@@ -246,6 +246,57 @@ func TestMissingFiles_DanglingSymlink(t *testing.T) {
 	}
 }
 
+func TestSupersededSnapshots(t *testing.T) {
+	const stale = "89abcdef0123456789abcdef0123456789abcdef"
+	root := t.TempDir()
+	snapshots := filepath.Join(root, "models--org--model", "snapshots")
+	for _, rev := range []string{testHash, stale} {
+		if err := os.MkdirAll(filepath.Join(snapshots, rev), 0o750); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(snapshots, rev, "w.bin"), []byte("12345"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	got, err := localembed.SupersededSnapshots(root, localembed.Model{RepoID: "org/model"}, testHash)
+	if err != nil {
+		t.Fatalf("SupersededSnapshots: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d superseded snapshots, want 1: %+v", len(got), got)
+	}
+	if got[0].Path != filepath.Join(snapshots, stale) {
+		t.Errorf("Path = %q, want %q", got[0].Path, filepath.Join(snapshots, stale))
+	}
+	if got[0].Bytes != 5 {
+		t.Errorf("Bytes = %d, want 5", got[0].Bytes)
+	}
+}
+
+func TestSupersededSnapshots_NoneWhenOnlyKeepExists(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "models--org--model", "snapshots", testHash), 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	got, err := localembed.SupersededSnapshots(root, localembed.Model{RepoID: "org/model"}, testHash)
+	if err != nil {
+		t.Fatalf("SupersededSnapshots: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %+v, want none", got)
+	}
+}
+
+func TestSupersededSnapshots_MissingDirIsNotAnError(t *testing.T) {
+	got, err := localembed.SupersededSnapshots(t.TempDir(), localembed.Model{RepoID: "org/model"}, testHash)
+	if err != nil {
+		t.Fatalf("SupersededSnapshots on empty root: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %+v, want none", got)
+	}
+}
+
 // writeSized creates a file of exactly size bytes, so size checks can be
 // exercised without materializing real weights.
 func writeSized(t *testing.T, path string, size int64) {

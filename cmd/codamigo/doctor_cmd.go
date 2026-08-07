@@ -230,17 +230,27 @@ func reportProvider(cfg *config.Config, emb embedder.Embedder) {
 		fmt.Printf("[FAIL] Model: %v\n", err)
 		return
 	}
-	fmt.Printf("       Model: %s (%s)\n", model.DisplayName(), model.RepoID)
-	if !model.Pinned() {
-		fmt.Printf("[WARN] %s is not a built-in model, so its files are not checksum-verified\n", model.DisplayName())
-	}
-
 	root, err := localModelsRoot(cfg)
 	if err != nil {
 		fmt.Printf("[FAIL] Models directory: %v\n", err)
 		return
 	}
+	fmt.Printf("       Model: %s (%s)\n", model.DisplayName(), model.RepoID)
+	if !model.Pinned() {
+		fmt.Printf("[WARN] %s is not a built-in model, so its files are not checksum-verified\n", model.DisplayName())
+	}
+
 	if dir, err := localembed.ModelDir(root, model); err == nil {
+		switch pin, err := localembed.ReadPin(dir); {
+		case err == nil:
+			fmt.Printf("       Revision: %s (pinned %s)\n", pin.CommitHash, pin.ResolvedFrom)
+		case errors.Is(err, localembed.ErrNoPin):
+			fmt.Printf("       Revision: no pin file; derived from the cached repository info\n")
+			fmt.Printf("       Run 'codamigo download-model' to record one.\n")
+		default:
+			fmt.Printf("[WARN] Revision: %v\n", err)
+		}
+
 		resolved, _, err := localembed.ResolvePin(dir, model)
 		if err != nil {
 			warnIfModelMissing(root, model)

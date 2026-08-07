@@ -120,3 +120,54 @@ func IsDownloaded(modelDir string, m Model) (bool, error) {
 	}
 	return len(missing) == 0, nil
 }
+
+// SnapshotInfo describes one snapshot directory on disk.
+type SnapshotInfo struct {
+	Path  string
+	Bytes int64
+}
+
+// SupersededSnapshots returns the snapshot directories under modelDir other
+// than keep, with their sizes.
+//
+// Moving an unpinned model to a newer upstream revision leaves the previous
+// snapshot behind — often gigabytes of it. Reporting them is deliberate:
+// deleting a working set of weights on the user's behalf is not this package's
+// decision. A missing snapshots directory is not an error, just an empty
+// result.
+func SupersededSnapshots(modelDir string, m Model, keep string) ([]SnapshotInfo, error) {
+	snapshots := filepath.Join(modelDir, flatRepoDir(m.RepoID), "snapshots")
+	entries, err := os.ReadDir(snapshots)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", snapshots, err)
+	}
+	var out []SnapshotInfo
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == keep {
+			continue
+		}
+		path := filepath.Join(snapshots, e.Name())
+		out = append(out, SnapshotInfo{Path: path, Bytes: dirSize(path)})
+	}
+	return out, nil
+}
+
+// dirSize sums the sizes of the blobs a snapshot's entries point at. Errors are
+// swallowed: this figure is reported to a human, never acted on.
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // an unreadable entry just does not count
+		}
+		// Snapshot entries are symlinks into blobs/, so follow them.
+		if info, err := os.Stat(path); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
