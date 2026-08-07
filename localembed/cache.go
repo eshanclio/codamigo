@@ -71,41 +71,17 @@ func flatRepoDir(repoID string) string {
 	return "models--" + strings.ReplaceAll(repoID, "/", "--")
 }
 
-// SnapshotDir returns the directory holding m's actual files inside modelDir.
+// SnapshotDir returns the directory holding m's files inside modelDir.
 //
-// A pinned model names its revision, so the path is exact. An unpinned model
-// tracks "main", whose commit hash is only known after the download, so the
-// single directory under snapshots/ is used instead. Returns
-// [ErrModelNotDownloaded] when there is nothing there yet.
+// m.Revision must already be a concrete commit hash — [ResolvePin] is what
+// guarantees that. Naming the path needs no filesystem access; whether the
+// files are actually present is [MissingFiles]' question.
 func SnapshotDir(modelDir string, m Model) (string, error) {
-	snapshots := filepath.Join(modelDir, flatRepoDir(m.RepoID), "snapshots")
-	if m.Revision != "" && m.Revision != "main" {
-		return filepath.Join(snapshots, m.Revision), nil
+	if !isCommitHash(m.Revision) {
+		return "", fmt.Errorf("%s has unresolved revision %q; call ResolvePin first",
+			m.DisplayName(), m.Revision)
 	}
-	entries, err := os.ReadDir(snapshots)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", fmt.Errorf("%w: %s has no snapshot under %s", ErrModelNotDownloaded, m.DisplayName(), snapshots)
-	}
-	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", snapshots, err)
-	}
-	var dirs []string
-	for _, e := range entries {
-		if e.IsDir() {
-			dirs = append(dirs, e.Name())
-		}
-	}
-	switch len(dirs) {
-	case 0:
-		return "", fmt.Errorf("%w: %s has no snapshot under %s", ErrModelNotDownloaded, m.DisplayName(), snapshots)
-	case 1:
-		return filepath.Join(snapshots, dirs[0]), nil
-	default:
-		// Several revisions of an unpinned model. Refuse rather than pick, since
-		// silently loading the wrong weights is worse than an actionable error.
-		return "", fmt.Errorf("%s has %d revisions under %s; pin embedding_model to a registry model "+
-			"or remove the directory and re-download", m.DisplayName(), len(dirs), snapshots)
-	}
+	return filepath.Join(modelDir, flatRepoDir(m.RepoID), "snapshots", m.Revision), nil
 }
 
 // MissingFiles returns the manifest paths that are absent from modelDir or that
@@ -116,13 +92,6 @@ func SnapshotDir(modelDir string, m Model) (string, error) {
 // used rather than os.Lstat: a dangling link must count as missing.
 func MissingFiles(modelDir string, m Model) ([]string, error) {
 	snapshot, err := SnapshotDir(modelDir, m)
-	if errors.Is(err, ErrModelNotDownloaded) {
-		paths := make([]string, len(m.Files))
-		for i, f := range m.Files {
-			paths[i] = f.Path
-		}
-		return paths, nil
-	}
 	if err != nil {
 		return nil, err
 	}

@@ -188,7 +188,12 @@ func isModelDownloaded(root string, model localembed.Model) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return localembed.IsDownloaded(dir, model)
+	resolved, _, err := localembed.ResolvePin(dir, model)
+	if err != nil {
+		// No resolvable revision means nothing usable is on disk.
+		return false, nil
+	}
+	return localembed.IsDownloaded(dir, resolved)
 }
 
 // warnIfModelMissing prints an actionable hint when the local provider is
@@ -198,7 +203,13 @@ func warnIfModelMissing(root string, model localembed.Model) {
 	if err != nil {
 		return
 	}
-	missing, err := localembed.MissingFiles(dir, model)
+	resolved, _, err := localembed.ResolvePin(dir, model)
+	if err != nil {
+		fmt.Printf("[FAIL] Model %s is not downloaded (%v)\n", model.DisplayName(), err)
+		fmt.Printf("       Run: codamigo download-model --model %s\n", model.DisplayName())
+		return
+	}
+	missing, err := localembed.MissingFiles(dir, resolved)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			fmt.Printf("[WARN] Could not inspect %s: %v\n", dir, err)

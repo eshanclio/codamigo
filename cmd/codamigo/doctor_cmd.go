@@ -241,7 +241,10 @@ func reportProvider(cfg *config.Config, emb embedder.Embedder) {
 		return
 	}
 	if dir, err := localembed.ModelDir(root, model); err == nil {
-		if missing, err := localembed.MissingFiles(dir, model); err == nil && len(missing) == 0 {
+		resolved, _, err := localembed.ResolvePin(dir, model)
+		if err != nil {
+			warnIfModelMissing(root, model)
+		} else if missing, err := localembed.MissingFiles(dir, resolved); err == nil && len(missing) == 0 {
 			fmt.Printf("[OK]  Model files present: %s\n", dir)
 		} else {
 			warnIfModelMissing(root, model)

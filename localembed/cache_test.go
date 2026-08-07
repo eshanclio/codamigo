@@ -1,7 +1,6 @@
 package localembed_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -96,52 +95,37 @@ func TestSnapshotDir_PinnedRevision(t *testing.T) {
 	}
 }
 
-func TestSnapshotDir_UnpinnedDiscoversRevision(t *testing.T) {
-	m, err := localembed.Lookup("org/model")
-	if err != nil {
-		t.Fatalf("Lookup: %v", err)
-	}
+func TestSnapshotDir_UsesRevisionDirectly(t *testing.T) {
 	root := t.TempDir()
-	snapshots := filepath.Join(root, "models--org--model", "snapshots", "abc123")
-	if err := os.MkdirAll(snapshots, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	dir, err := localembed.SnapshotDir(root, m)
+	m := localembed.Model{RepoID: "org/model", Revision: testHash}
+	want := filepath.Join(root, "models--org--model", "snapshots", testHash)
+
+	got, err := localembed.SnapshotDir(root, m)
 	if err != nil {
 		t.Fatalf("SnapshotDir: %v", err)
 	}
-	if dir != snapshots {
-		t.Errorf("SnapshotDir = %q, want %q", dir, snapshots)
+	if got != want {
+		t.Errorf("SnapshotDir = %q, want %q", got, want)
 	}
 }
 
-func TestSnapshotDir_UnpinnedMissing(t *testing.T) {
-	m, err := localembed.Lookup("org/model")
-	if err != nil {
-		t.Fatalf("Lookup: %v", err)
-	}
-	_, err = localembed.SnapshotDir(t.TempDir(), m)
-	if !errors.Is(err, localembed.ErrModelNotDownloaded) {
-		t.Errorf("SnapshotDir on an empty root = %v, want ErrModelNotDownloaded", err)
-	}
-}
-
-// TestSnapshotDir_UnpinnedAmbiguous asserts we refuse rather than guess:
-// silently loading the wrong revision's weights would produce vectors that are
-// incompatible with the index without any error.
-func TestSnapshotDir_UnpinnedAmbiguous(t *testing.T) {
-	m, err := localembed.Lookup("org/model")
-	if err != nil {
-		t.Fatalf("Lookup: %v", err)
-	}
+func TestSnapshotDir_DoesNotRequireTheDirectoryToExist(t *testing.T) {
+	// SnapshotDir names a path; MissingFiles is what decides whether the files
+	// are there. Several revisions side by side is no longer ambiguous, because
+	// the pin says which one to use.
 	root := t.TempDir()
-	for _, rev := range []string{"abc", "def"} {
-		if err := os.MkdirAll(filepath.Join(root, "models--org--model", "snapshots", rev), 0o755); err != nil {
+	repoDir := filepath.Join(root, "models--org--model", "snapshots")
+	for _, rev := range []string{testHash, "89abcdef0123456789abcdef0123456789abcdef"} {
+		if err := os.MkdirAll(filepath.Join(repoDir, rev), 0o750); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}
 	}
-	if _, err := localembed.SnapshotDir(root, m); err == nil {
-		t.Error("SnapshotDir with two revisions = nil error, want refusal")
+	got, err := localembed.SnapshotDir(root, localembed.Model{RepoID: "org/model", Revision: testHash})
+	if err != nil {
+		t.Fatalf("SnapshotDir with two revisions present: %v", err)
+	}
+	if got != filepath.Join(repoDir, testHash) {
+		t.Errorf("SnapshotDir = %q, want the pinned revision %q", got, filepath.Join(repoDir, testHash))
 	}
 }
 
