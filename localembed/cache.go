@@ -144,26 +144,83 @@ func SupersededSnapshots(modelDir string, m Model, keep string) ([]SnapshotInfo,
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", snapshots, err)
 	}
+	// Resolved once: every blob the kept snapshot still references. Any
+	// superseded snapshot entry pointing at one of these frees nothing when
+	// deleted, since removing a snapshot only removes its symlinks.
+	keepBlobs := blobTargets(filepath.Join(snapshots, keep))
 	var out []SnapshotInfo
 	for _, e := range entries {
 		if !e.IsDir() || e.Name() == keep {
 			continue
 		}
 		path := filepath.Join(snapshots, e.Name())
-		out = append(out, SnapshotInfo{Path: path, Bytes: dirSize(path)})
+		out = append(out, SnapshotInfo{Path: path, Bytes: dirSize(path, keepBlobs)})
 	}
 	return out, nil
 }
 
-// dirSize sums the sizes of the blobs a snapshot's entries point at. Errors are
-// swallowed: this figure is reported to a human, never acted on.
-func dirSize(root string) int64 {
+// blobTargets resolves every symlink under snapshotDir to its target's
+// absolute, cleaned path. go-huggingface deduplicates identical file content
+// by etag: every entry in a snapshot directory is normally a symlink into a
+// shared blobs/ directory, so this is how [dirSize] tells which blobs the kept
+// snapshot still needs. snapshotDir need not exist (e.g. an already-deleted
+// keep); errors are swallowed and simply yield an empty set, since this is
+// only ever used to decide what a human-facing size figure should say.
+func blobTargets(snapshotDir string) map[string]struct{} {
+	targets := make(map[string]struct{})
+	_ = filepath.WalkDir(snapshotDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // an unreadable entry just contributes nothing
+		}
+		if resolved, ok := resolveSymlink(path); ok {
+			targets[resolved] = struct{}{}
+		}
+		return nil
+	})
+	return targets
+}
+
+// resolveSymlink reports the absolute, cleaned target of path if path is a
+// symlink, resolving a relative target against path's own directory the way
+// go-huggingface's snapshot entries do. ok is false for anything else,
+// including a plain file or any read error, so callers can just skip it.
+func resolveSymlink(path string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	return filepath.Clean(target), true
+}
+
+// dirSize reports the bytes actually reclaimable if the superseded snapshot
+// directory root were deleted.
+//
+// Snapshot entries are normally symlinks into a shared blobs/ directory,
+// deduplicated by etag: two snapshots of the same model share a blob for
+// every file whose content did not change between revisions. Deleting a
+// snapshot directory only removes its symlinks, never the blobs — so an entry
+// whose target is also referenced by the kept snapshot (keepBlobs) frees
+// nothing and must not be counted. A plain (non-symlinked) file is always
+// counted, since there is nothing else referencing it. Errors are swallowed:
+// this figure is reported to a human, never acted on.
+func dirSize(root string, keepBlobs map[string]struct{}) int64 {
 	var total int64
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil //nolint:nilerr // an unreadable entry just does not count
 		}
-		// Snapshot entries are symlinks into blobs/, so follow them.
+		if resolved, ok := resolveSymlink(path); ok {
+			if _, shared := keepBlobs[resolved]; shared {
+				return nil
+			}
+		}
 		if info, err := os.Stat(path); err == nil {
 			total += info.Size()
 		}

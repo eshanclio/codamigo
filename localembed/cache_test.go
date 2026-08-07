@@ -297,6 +297,74 @@ func TestSupersededSnapshots_MissingDirIsNotAnError(t *testing.T) {
 	}
 }
 
+// TestSupersededSnapshots_SharedBlobsNotCounted covers go-huggingface's real
+// layout: snapshot entries are symlinks into a shared blobs/ directory,
+// deduplicated by etag. Deleting a superseded snapshot only removes its
+// symlinks, not blobs still referenced by the kept snapshot, so those bytes
+// are not actually reclaimable and must not be counted. Without the fix this
+// reports the sum of both blobs (shared + unique) instead of only the unique
+// one.
+func TestSupersededSnapshots_SharedBlobsNotCounted(t *testing.T) {
+	const stale = "89abcdef0123456789abcdef0123456789abcdef"
+	root := t.TempDir()
+	repoDir := filepath.Join(root, "models--org--model")
+	blobs := filepath.Join(repoDir, "blobs")
+	if err := os.MkdirAll(blobs, 0o750); err != nil {
+		t.Fatalf("MkdirAll blobs: %v", err)
+	}
+	sharedBlob := filepath.Join(blobs, "shared")
+	keepOnlyBlob := filepath.Join(blobs, "keep-only")
+	staleOnlyBlob := filepath.Join(blobs, "stale-only")
+	for path, content := range map[string]string{
+		sharedBlob:    "shared-weights-unchanged",
+		keepOnlyBlob:  "new-config",
+		staleOnlyBlob: "only-in-stale",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile %s: %v", path, err)
+		}
+	}
+
+	snapshots := filepath.Join(repoDir, "snapshots")
+	keepDir := filepath.Join(snapshots, testHash)
+	staleDir := filepath.Join(snapshots, stale)
+	if err := os.MkdirAll(keepDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll keep: %v", err)
+	}
+	if err := os.MkdirAll(staleDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll stale: %v", err)
+	}
+
+	// The kept snapshot's weights did not change (still points at the shared
+	// blob) but its config did (points at a blob the stale snapshot never
+	// referenced).
+	if err := os.Symlink(sharedBlob, filepath.Join(keepDir, "model.bin")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(keepOnlyBlob, filepath.Join(keepDir, "config.json")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	// The stale snapshot shares the weights blob but has its own extra file.
+	if err := os.Symlink(sharedBlob, filepath.Join(staleDir, "model.bin")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+	if err := os.Symlink(staleOnlyBlob, filepath.Join(staleDir, "extra.bin")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	got, err := localembed.SupersededSnapshots(root, localembed.Model{RepoID: "org/model"}, testHash)
+	if err != nil {
+		t.Fatalf("SupersededSnapshots: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d superseded snapshots, want 1: %+v", len(got), got)
+	}
+	want := int64(len("only-in-stale"))
+	if got[0].Bytes != want {
+		t.Errorf("Bytes = %d, want %d (only the blob not shared with the kept snapshot)", got[0].Bytes, want)
+	}
+}
+
 // writeSized creates a file of exactly size bytes, so size checks can be
 // exercised without materializing real weights.
 func writeSized(t *testing.T, path string, size int64) {
