@@ -114,6 +114,21 @@ func Download(ctx context.Context, opts DownloadOptions) (*DownloadResult, error
 		return nil, downloadError(err, m, opts.Token)
 	}
 
+	// Resolve the concrete commit hash once, right after DownloadInfo wrote the
+	// info file, and before the per-file loop. SnapshotDir now requires a
+	// concrete hash — existingFile (via fetchFile) would otherwise be handed
+	// m's unresolved "main" for an unpinned model and silently treat every file
+	// as absent, turning an idempotent second run into a full re-download.
+	rev := m.Revision
+	if rev == "" {
+		rev = "main"
+	}
+	hash, infoBody, err := readDownloadInfo(opts.ModelDir, m, rev)
+	if err != nil {
+		return nil, err
+	}
+	opts.Model.Revision = hash
+
 	result := &DownloadResult{ModelDir: opts.ModelDir, Verified: m.Pinned()}
 	for _, f := range m.Files {
 		if err := ctx.Err(); err != nil {
@@ -133,7 +148,7 @@ func Download(ctx context.Context, opts DownloadOptions) (*DownloadResult, error
 		}
 	}
 
-	pin, err := writeDownloadPin(opts)
+	pin, err := writeDownloadPin(opts, rev, hash, infoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -143,41 +158,44 @@ func Download(ctx context.Context, opts DownloadOptions) (*DownloadResult, error
 	return result, nil
 }
 
-// writeDownloadPin records the revision this download resolved to, so loading
-// the model later needs no network access.
-//
-// Both the hash and the verbatim body come from the single info file
-// go-huggingface has just written. Reading it directly rather than calling
-// repo.Info() avoids a nil dereference nilaway would reject, and keeps the body
-// byte-exact for the shim to replay.
-func writeDownloadPin(opts DownloadOptions) (Pin, error) {
-	m := opts.Model
-	rev := m.Revision
-	if rev == "" {
-		rev = "main"
-	}
-	repoDir := filepath.Join(opts.ModelDir, flatRepoDir(m.RepoID))
+// readDownloadInfo reads and parses the repository info file go-huggingface
+// just wrote for rev, returning the resolved commit hash and the verbatim
+// body. Reading the file directly rather than calling repo.Info() avoids a nil
+// dereference nilaway would reject, and keeps the body byte-exact for the shim
+// to replay later.
+func readDownloadInfo(modelDir string, m Model, rev string) (hash string, body []byte, err error) {
+	repoDir := filepath.Join(modelDir, flatRepoDir(m.RepoID))
 	infoPath := filepath.Join(repoDir, "info", rev)
 	// #nosec G304 -- infoPath is inside the model directory this call just populated
-	body, err := os.ReadFile(infoPath)
+	body, err = os.ReadFile(infoPath)
 	if err != nil {
-		return Pin{}, fmt.Errorf("reading repository info for %s at %s: %w", m.DisplayName(), infoPath, err)
+		return "", nil, fmt.Errorf("reading repository info for %s at %s: %w", m.DisplayName(), infoPath, err)
 	}
 	var meta struct {
 		SHA string `json:"sha"`
 	}
 	if err := json.Unmarshal(body, &meta); err != nil {
-		return Pin{}, fmt.Errorf("parsing repository info for %s at %s: %w", m.DisplayName(), infoPath, err)
+		return "", nil, fmt.Errorf("parsing repository info for %s at %s: %w", m.DisplayName(), infoPath, err)
 	}
 	if !isCommitHash(meta.SHA) {
-		return Pin{}, fmt.Errorf("repository info for %s at %s has no valid sha", m.DisplayName(), infoPath)
+		return "", nil, fmt.Errorf("repository info for %s at %s has no valid sha", m.DisplayName(), infoPath)
 	}
+	return meta.SHA, body, nil
+}
+
+// writeDownloadPin records the revision this download resolved to, so loading
+// the model later needs no network access. hash and body are the values
+// [readDownloadInfo] already parsed from the info file before the per-file
+// loop, reused here rather than read a second time.
+func writeDownloadPin(opts DownloadOptions, rev, hash string, body []byte) (Pin, error) {
+	m := opts.Model
+	repoDir := filepath.Join(opts.ModelDir, flatRepoDir(m.RepoID))
 	pin := Pin{
 		RepoID:       m.RepoID,
-		CommitHash:   meta.SHA,
+		CommitHash:   hash,
 		ResolvedFrom: rev,
 		ResolvedAt:   time.Now().UTC(),
-		Dimensions:   snapshotHiddenSize(repoDir, meta.SHA),
+		Dimensions:   snapshotHiddenSize(repoDir, hash),
 		RepoInfo:     body,
 	}
 	if err := WritePin(opts.ModelDir, pin); err != nil {

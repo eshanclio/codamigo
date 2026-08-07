@@ -204,6 +204,49 @@ func TestDownload_IdempotentSkip(t *testing.T) {
 	}
 }
 
+// TestDownload_IdempotentSkipUnpinned is the unpinned twin of
+// TestDownload_IdempotentSkip: a repository id tracking "main" has
+// Model.Revision == "main" going into Download, which SnapshotDir now rejects
+// outright. A second run must still resolve the concrete commit hash before
+// checking what is already on disk, or every file gets reported as
+// downloaded again instead of skipped.
+func TestDownload_IdempotentSkipUnpinned(t *testing.T) {
+	files, order := testFiles()
+	repoID := "test-org/unpinned-model"
+	hub := newFakeHub(t, repoID, files)
+	manifest := make([]localembed.ManifestFile, 0, len(order))
+	for _, name := range order {
+		manifest = append(manifest, localembed.ManifestFile{Path: name})
+	}
+	m := localembed.Model{RepoID: repoID, Revision: "main", Files: manifest}
+	dir := t.TempDir()
+	opts := localembed.DownloadOptions{Model: m, ModelDir: dir, Endpoint: hub.URL}
+
+	if _, err := localembed.Download(t.Context(), opts); err != nil {
+		t.Fatalf("first Download: %v", err)
+	}
+	firstCounts := map[string]int{}
+	for k, v := range hub.requests {
+		firstCounts[k] = v
+	}
+
+	res, err := localembed.Download(t.Context(), opts)
+	if err != nil {
+		t.Fatalf("second Download: %v", err)
+	}
+	if len(res.Skipped) != len(order) {
+		t.Errorf("Skipped = %v, want all %d files on a repeat run", res.Skipped, len(order))
+	}
+	if len(res.Downloaded) != 0 {
+		t.Errorf("Downloaded = %v, want none on a repeat run", res.Downloaded)
+	}
+	for name, count := range hub.requests {
+		if count != firstCounts[name] {
+			t.Errorf("%s was re-fetched (%d then %d requests)", name, firstCounts[name], count)
+		}
+	}
+}
+
 func TestDownload_ForceRefetches(t *testing.T) {
 	files, order := testFiles()
 	repoID := "test-org/test-model"
