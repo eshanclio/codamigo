@@ -167,6 +167,13 @@ func New(opts Options) (*Embedder, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Resolve the revision before anything looks for files: the snapshot
+	// directory is named after the commit hash, so MissingFiles cannot find
+	// anything until the hash is known.
+	descriptor, pin, err := ResolvePin(modelDir, descriptor)
+	if err != nil {
+		return nil, err
+	}
 	missing, err := MissingFiles(modelDir, descriptor)
 	if err != nil {
 		return nil, err
@@ -177,10 +184,20 @@ func New(opts Options) (*Embedder, error) {
 			ErrModelNotDownloaded, descriptor.DisplayName(), len(missing), modelDir, missing[0], descriptor.DisplayName())
 	}
 
-	repo := hub.New(descriptor.RepoID).WithCacheDir(modelDir)
-	if descriptor.Revision != "" {
-		repo = repo.WithRevision(descriptor.Revision)
+	// go-huggingface re-resolves the revision over the network on every load and
+	// ignores its own on-disk cache, so point it at a local shim that answers
+	// from the pin instead. Every *hub.Repo access happens below, during
+	// loading, so the shim can be shut down as soon as New returns.
+	shim, err := startInfoShim(descriptor, pin)
+	if err != nil {
+		return nil, err
 	}
+	defer func() { _ = shim.Close() }()
+
+	repo := hub.New(descriptor.RepoID).
+		WithCacheDir(modelDir).
+		WithRevision(descriptor.Revision).
+		WithEndpoint(shim.URL)
 	repo.Verbosity = 0
 	// The files are already local, but LoadModel needs the repo's file index.
 	if err := repo.DownloadInfo(false); err != nil {
@@ -189,6 +206,14 @@ func New(opts Options) (*Embedder, error) {
 
 	hfModel, err := transformer.LoadModel(repo)
 	if err != nil {
+		// A file the manifest does not cover — standardManifest is a subset of
+		// what some repositories publish — reaches the shim as a request it
+		// refuses. Say which file, rather than surfacing an HTTP error.
+		if missed := shim.missedPaths(); len(missed) > 0 {
+			return nil, fmt.Errorf("%w: %s is not in the local snapshot for %s. "+
+				"Run: codamigo download-model --model %s",
+				ErrModelNotDownloaded, missed[0], descriptor.DisplayName(), descriptor.DisplayName())
+		}
 		return nil, fmt.Errorf("loading %s: %w", descriptor.DisplayName(), err)
 	}
 	dim := hfModel.Config.HiddenSize
