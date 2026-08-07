@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,5 +91,143 @@ func TestPin_ReadCorruptIsErrNoPin(t *testing.T) {
 				t.Errorf("ReadPin = %v, want ErrNoPin", err)
 			}
 		})
+	}
+}
+
+// writeDerivable lays out a model directory the way go-huggingface leaves one:
+// an info file named after the requested revision, whose "sha" names an
+// existing snapshot directory. No pin file.
+func writeDerivable(t *testing.T, dir, requestedRev, sha string) {
+	t.Helper()
+	repoDir := filepath.Join(dir, "models--org--model")
+	if err := os.MkdirAll(filepath.Join(repoDir, "info"), 0o750); err != nil {
+		t.Fatalf("MkdirAll info: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, "snapshots", sha), 0o750); err != nil {
+		t.Fatalf("MkdirAll snapshots: %v", err)
+	}
+	body := `{"id":"org/model","sha":"` + sha + `","siblings":[]}`
+	if err := os.WriteFile(filepath.Join(repoDir, "info", requestedRev), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile info: %v", err)
+	}
+}
+
+func unpinnedTestModel() localembed.Model {
+	return localembed.Model{
+		RepoID:   "org/model",
+		Revision: "main",
+		Files:    []localembed.ManifestFile{{Path: "config.json"}},
+	}
+}
+
+func registeredTestModel(revision string) localembed.Model {
+	return localembed.Model{
+		Name:       "test-model",
+		RepoID:     "org/model",
+		Revision:   revision,
+		Registered: true,
+		Files:      []localembed.ManifestFile{{Path: "config.json"}},
+	}
+}
+
+func TestResolvePin_UnpinnedUsesPinFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := localembed.WritePin(dir, localembed.Pin{
+		RepoID: "org/model", CommitHash: testHash, ResolvedFrom: "main",
+		RepoInfo: json.RawMessage(`{"sha":"` + testHash + `"}`),
+	}); err != nil {
+		t.Fatalf("WritePin: %v", err)
+	}
+	got, pin, err := localembed.ResolvePin(dir, unpinnedTestModel())
+	if err != nil {
+		t.Fatalf("ResolvePin: %v", err)
+	}
+	if got.Revision != testHash {
+		t.Errorf("Revision = %q, want %q", got.Revision, testHash)
+	}
+	if pin.CommitHash != testHash {
+		t.Errorf("pin.CommitHash = %q, want %q", pin.CommitHash, testHash)
+	}
+}
+
+func TestResolvePin_UnpinnedDerivesWhenNoPinFile(t *testing.T) {
+	// The migration path: an existing install has info/main and a snapshot but
+	// no pin file, and must resolve with no network and no re-download.
+	dir := t.TempDir()
+	writeDerivable(t, dir, "main", testHash)
+
+	got, pin, err := localembed.ResolvePin(dir, unpinnedTestModel())
+	if err != nil {
+		t.Fatalf("ResolvePin: %v", err)
+	}
+	if got.Revision != testHash {
+		t.Errorf("Revision = %q, want %q", got.Revision, testHash)
+	}
+	if len(pin.RepoInfo) == 0 {
+		t.Error("derived pin has empty RepoInfo; the shim would have nothing to serve")
+	}
+	// Derivation must not write anything: the load path stays read-only.
+	if _, err := os.Stat(localembed.PinPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("derivation wrote a pin file; Stat err = %v, want not-exist", err)
+	}
+}
+
+func TestResolvePin_DeriveRejectsShaWithoutSnapshot(t *testing.T) {
+	// An info file claiming a revision we never actually downloaded is not a
+	// usable pin.
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "models--org--model")
+	if err := os.MkdirAll(filepath.Join(repoDir, "info"), 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	body := `{"sha":"` + testHash + `"}`
+	if err := os.WriteFile(filepath.Join(repoDir, "info", "main"), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, _, err := localembed.ResolvePin(dir, unpinnedTestModel()); !errors.Is(err, localembed.ErrModelNotDownloaded) {
+		t.Errorf("ResolvePin = %v, want ErrModelNotDownloaded", err)
+	}
+}
+
+func TestResolvePin_NothingResolvable(t *testing.T) {
+	if _, _, err := localembed.ResolvePin(t.TempDir(), unpinnedTestModel()); !errors.Is(err, localembed.ErrModelNotDownloaded) {
+		t.Errorf("ResolvePin on empty dir = %v, want ErrModelNotDownloaded", err)
+	}
+}
+
+func TestResolvePin_RegistryRevisionWins(t *testing.T) {
+	// A registry model's compiled-in revision is the supply-chain pin. Even a
+	// well-formed pin file agreeing with it must not become the source of truth.
+	dir := t.TempDir()
+	if err := localembed.WritePin(dir, localembed.Pin{
+		RepoID: "org/model", CommitHash: testHash, ResolvedFrom: testHash,
+		RepoInfo: json.RawMessage(`{"sha":"` + testHash + `"}`),
+	}); err != nil {
+		t.Fatalf("WritePin: %v", err)
+	}
+	got, _, err := localembed.ResolvePin(dir, registeredTestModel(testHash))
+	if err != nil {
+		t.Fatalf("ResolvePin: %v", err)
+	}
+	if got.Revision != testHash {
+		t.Errorf("Revision = %q, want the compiled-in %q", got.Revision, testHash)
+	}
+}
+
+func TestResolvePin_RegistryMismatchIsRefused(t *testing.T) {
+	const otherHash = "89abcdef0123456789abcdef0123456789abcdef"
+	dir := t.TempDir()
+	if err := localembed.WritePin(dir, localembed.Pin{
+		RepoID: "org/model", CommitHash: otherHash, ResolvedFrom: "main",
+		RepoInfo: json.RawMessage(`{"sha":"` + otherHash + `"}`),
+	}); err != nil {
+		t.Fatalf("WritePin: %v", err)
+	}
+	_, _, err := localembed.ResolvePin(dir, registeredTestModel(testHash))
+	if err == nil {
+		t.Fatal("ResolvePin succeeded with a pin that contradicts the compiled-in revision")
+	}
+	if !strings.Contains(err.Error(), "download-model") {
+		t.Errorf("error %q does not tell the user how to recover", err)
 	}
 }

@@ -96,3 +96,79 @@ func isCommitHash(s string) bool {
 	}
 	return true
 }
+
+// derivePin reconstructs a pin from what go-huggingface already left on disk,
+// for a model directory downloaded before pin files existed. It reads the info
+// file for the requested revision, takes its "sha", and confirms a snapshot of
+// that name is actually present.
+//
+// The info file's bytes become the pin's RepoInfo. They are read here, before
+// the shim starts and before any load begins, which is what keeps them safe
+// from LockedDownload unlinking the file later.
+func derivePin(modelDir string, m Model) (Pin, error) {
+	rev := m.Revision
+	if rev == "" {
+		rev = "main"
+	}
+	repoDir := filepath.Join(modelDir, flatRepoDir(m.RepoID))
+	infoPath := filepath.Join(repoDir, "info", rev)
+	// #nosec G304 -- infoPath is built from the configured models root and the model's own repo id
+	body, err := os.ReadFile(infoPath)
+	if err != nil {
+		return Pin{}, fmt.Errorf("%w: %s has no pin file and no cached info at %s. "+
+			"Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, m.DisplayName(), infoPath, m.DisplayName())
+	}
+	var meta struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return Pin{}, fmt.Errorf("%w: cached info at %s is not valid JSON: %w. "+
+			"Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, infoPath, err, m.DisplayName())
+	}
+	if !isCommitHash(meta.SHA) {
+		return Pin{}, fmt.Errorf("%w: cached info at %s has no valid sha. "+
+			"Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, infoPath, m.DisplayName())
+	}
+	snapshot := filepath.Join(repoDir, "snapshots", meta.SHA)
+	if info, err := os.Stat(snapshot); err != nil || !info.IsDir() {
+		return Pin{}, fmt.Errorf("%w: cached info names revision %s but %s is not present. "+
+			"Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, meta.SHA, snapshot, m.DisplayName())
+	}
+	return Pin{
+		RepoID:       m.RepoID,
+		CommitHash:   meta.SHA,
+		ResolvedFrom: rev,
+		RepoInfo:     body,
+	}, nil
+}
+
+// ResolvePin returns m with Revision set to the concrete commit hash the model
+// directory actually holds, together with the pin that decided it.
+//
+// A registry model keeps its compiled-in Revision: that hash is the
+// supply-chain pin, so a pin file must never be able to redirect it. A pin file
+// that contradicts it means the directory and the binary disagree, which is
+// reported rather than silently resolved in either direction.
+func ResolvePin(modelDir string, m Model) (Model, Pin, error) {
+	p, err := ReadPin(modelDir)
+	if err != nil {
+		if p, err = derivePin(modelDir, m); err != nil {
+			return Model{}, Pin{}, err
+		}
+	}
+	if m.Registered {
+		if p.CommitHash != m.Revision {
+			return Model{}, Pin{}, fmt.Errorf(
+				"%s is pinned to revision %s but %s holds %s. "+
+					"Run: codamigo download-model --model %s --force",
+				m.DisplayName(), m.Revision, modelDir, p.CommitHash, m.DisplayName())
+		}
+		return m, p, nil
+	}
+	m.Revision = p.CommitHash
+	return m, p, nil
+}
