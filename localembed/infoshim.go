@@ -1,6 +1,7 @@
 package localembed
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -40,6 +41,9 @@ type infoShim struct {
 // Close it; it is only needed for the span of [New], since every *hub.Repo
 // access happens during loading.
 func startInfoShim(m Model, p Pin) (*infoShim, error) {
+	if err := validatePinRepoInfo(m, p); err != nil {
+		return nil, err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("starting local model info server for %s: %w", m.DisplayName(), err)
@@ -85,6 +89,36 @@ func startInfoShim(m Model, p Pin) (*infoShim, error) {
 		}
 	}()
 	return s, nil
+}
+
+// validatePinRepoInfo confirms p.RepoInfo actually describes the commit p
+// claims, before anything downstream can act on it.
+//
+// ReadPin only validates that CommitHash looks like a commit hash — it never
+// inspects RepoInfo. Without this check, a pin with a valid hash but an
+// empty, unparseable, or mismatched RepoInfo would reach go-huggingface's
+// DownloadInfo, whose LockedDownload unlinks info/<hash> before finding out
+// the replacement is unusable: the model becomes unloadable offline until a
+// network re-download, destroying the exact file the offline path depends
+// on. Running this before startInfoShim's listener starts guarantees nothing
+// downstream gets the chance to unlink that file.
+func validatePinRepoInfo(m Model, p Pin) error {
+	if len(p.RepoInfo) == 0 {
+		return fmt.Errorf("%w: pin for %s has no repo_info. Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, m.DisplayName(), m.DisplayName())
+	}
+	var meta struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(p.RepoInfo, &meta); err != nil {
+		return fmt.Errorf("%w: pin for %s has unparseable repo_info: %v. Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, m.DisplayName(), err, m.DisplayName())
+	}
+	if meta.SHA != p.CommitHash {
+		return fmt.Errorf("%w: pin for %s names commit %s but repo_info sha is %s. Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, m.DisplayName(), p.CommitHash, meta.SHA, m.DisplayName())
+	}
+	return nil
 }
 
 func (s *infoShim) recordMiss(path string) {

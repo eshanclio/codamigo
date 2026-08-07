@@ -201,7 +201,8 @@ func New(opts Options) (*Embedder, error) {
 	repo.Verbosity = 0
 	// The files are already local, but LoadModel needs the repo's file index.
 	if err := repo.DownloadInfo(false); err != nil {
-		return nil, fmt.Errorf("reading local model info for %s: %w", descriptor.DisplayName(), err)
+		return nil, fmt.Errorf("%w: reading local model info for %s: %v. Run: codamigo download-model --model %s",
+			ErrModelNotDownloaded, descriptor.DisplayName(), err, descriptor.DisplayName())
 	}
 
 	hfModel, err := transformer.LoadModel(repo)
