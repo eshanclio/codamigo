@@ -402,3 +402,90 @@ func TestDownload_UnpinnedIsNotVerified(t *testing.T) {
 		t.Error("Verified = true for an unpinned model")
 	}
 }
+
+func TestDownload_WritesPin(t *testing.T) {
+	files, order := testFiles()
+	repoID := "test-org/test-model"
+	hub := newFakeHub(t, repoID, files)
+	m := pinnedModel(repoID, files, order)
+	dir := t.TempDir()
+
+	res, err := localembed.Download(t.Context(), localembed.DownloadOptions{
+		Model: m, ModelDir: dir, Endpoint: hub.URL,
+	})
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if res.CommitHash != fakeRevision {
+		t.Errorf("CommitHash = %q, want %q", res.CommitHash, fakeRevision)
+	}
+	// testFiles() serves config.json as {"hidden_size": 8}.
+	if res.Dimensions != 8 {
+		t.Errorf("Dimensions = %d, want 8", res.Dimensions)
+	}
+
+	pin, err := localembed.ReadPin(dir)
+	if err != nil {
+		t.Fatalf("ReadPin after Download: %v", err)
+	}
+	if pin.CommitHash != fakeRevision {
+		t.Errorf("pin.CommitHash = %q, want %q", pin.CommitHash, fakeRevision)
+	}
+	if pin.RepoID != repoID {
+		t.Errorf("pin.RepoID = %q, want %q", pin.RepoID, repoID)
+	}
+	if pin.Dimensions != 8 {
+		t.Errorf("pin.Dimensions = %d, want 8", pin.Dimensions)
+	}
+	if pin.ResolvedAt.IsZero() {
+		t.Error("pin.ResolvedAt is zero")
+	}
+	// The shim replays RepoInfo to go-huggingface, so it must be parseable as
+	// the repository info and carry the same sha.
+	var meta struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(pin.RepoInfo, &meta); err != nil {
+		t.Fatalf("pin.RepoInfo is not valid JSON: %v", err)
+	}
+	if meta.SHA != fakeRevision {
+		t.Errorf("pin.RepoInfo sha = %q, want %q", meta.SHA, fakeRevision)
+	}
+}
+
+func TestDownload_WritesPinForUnpinnedRepo(t *testing.T) {
+	// The case that motivated all of this: a bare repository id tracking "main".
+	files, order := testFiles()
+	repoID := "test-org/test-model"
+	hub := newFakeHub(t, repoID, files)
+	manifest := make([]localembed.ManifestFile, 0, len(order))
+	for _, name := range order {
+		manifest = append(manifest, localembed.ManifestFile{Path: name})
+	}
+	m := localembed.Model{RepoID: repoID, Revision: "main", Files: manifest}
+	dir := t.TempDir()
+
+	if _, err := localembed.Download(t.Context(), localembed.DownloadOptions{
+		Model: m, ModelDir: dir, Endpoint: hub.URL,
+	}); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	pin, err := localembed.ReadPin(dir)
+	if err != nil {
+		t.Fatalf("ReadPin: %v", err)
+	}
+	if pin.CommitHash != fakeRevision {
+		t.Errorf("pin.CommitHash = %q, want %q", pin.CommitHash, fakeRevision)
+	}
+	if pin.ResolvedFrom != "main" {
+		t.Errorf("pin.ResolvedFrom = %q, want \"main\"", pin.ResolvedFrom)
+	}
+	// And the resolved pin must now hand back a concrete revision.
+	resolved, _, err := localembed.ResolvePin(dir, m)
+	if err != nil {
+		t.Fatalf("ResolvePin: %v", err)
+	}
+	if resolved.Revision != fakeRevision {
+		t.Errorf("resolved Revision = %q, want %q", resolved.Revision, fakeRevision)
+	}
+}

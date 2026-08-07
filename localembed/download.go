@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gomlx/go-huggingface/hub"
 )
@@ -44,6 +46,14 @@ type DownloadResult struct {
 	// Verified reports whether checksums were compared. False for an unpinned
 	// repository id, where there is nothing to compare against.
 	Verified bool
+	// CommitHash is the upstream revision the files came from, resolved from
+	// the repository info. Recorded in the pin file so later loads need no
+	// network round trip to rediscover it.
+	CommitHash string
+	// Dimensions is the model's hidden size, read from the downloaded
+	// config.json. Zero when it could not be read. Reported so the caller can
+	// print a real embedding_dimensions value instead of a placeholder.
+	Dimensions int
 }
 
 // Download fetches every manifest file for opts.Model into opts.ModelDir and,
@@ -95,7 +105,12 @@ func Download(ctx context.Context, opts DownloadOptions) (*DownloadResult, error
 	// DownloadInfo resolves the revision and the file list. It does not take a
 	// context upstream, so Ctrl-C during this step is only noticed at the next
 	// ctx check below.
-	if err := repo.DownloadInfo(opts.Force); err != nil {
+	//
+	// Forced unconditionally: download-model is the one command that is meant to
+	// consult upstream, and DownloadInfo otherwise reuses a cached info file and
+	// would never observe that the tracked branch had moved. Loads never reach
+	// this code — they answer the same query from the pin file instead.
+	if err := repo.DownloadInfo(true); err != nil {
 		return nil, downloadError(err, m, opts.Token)
 	}
 
@@ -118,7 +133,78 @@ func Download(ctx context.Context, opts DownloadOptions) (*DownloadResult, error
 		}
 	}
 
+	pin, err := writeDownloadPin(opts)
+	if err != nil {
+		return nil, err
+	}
+	result.CommitHash = pin.CommitHash
+	result.Dimensions = pin.Dimensions
+
 	return result, nil
+}
+
+// writeDownloadPin records the revision this download resolved to, so loading
+// the model later needs no network access.
+//
+// Both the hash and the verbatim body come from the single info file
+// go-huggingface has just written. Reading it directly rather than calling
+// repo.Info() avoids a nil dereference nilaway would reject, and keeps the body
+// byte-exact for the shim to replay.
+func writeDownloadPin(opts DownloadOptions) (Pin, error) {
+	m := opts.Model
+	rev := m.Revision
+	if rev == "" {
+		rev = "main"
+	}
+	repoDir := filepath.Join(opts.ModelDir, flatRepoDir(m.RepoID))
+	infoPath := filepath.Join(repoDir, "info", rev)
+	// #nosec G304 -- infoPath is inside the model directory this call just populated
+	body, err := os.ReadFile(infoPath)
+	if err != nil {
+		return Pin{}, fmt.Errorf("reading repository info for %s at %s: %w", m.DisplayName(), infoPath, err)
+	}
+	var meta struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return Pin{}, fmt.Errorf("parsing repository info for %s at %s: %w", m.DisplayName(), infoPath, err)
+	}
+	if !isCommitHash(meta.SHA) {
+		return Pin{}, fmt.Errorf("repository info for %s at %s has no valid sha", m.DisplayName(), infoPath)
+	}
+	pin := Pin{
+		RepoID:       m.RepoID,
+		CommitHash:   meta.SHA,
+		ResolvedFrom: rev,
+		ResolvedAt:   time.Now().UTC(),
+		Dimensions:   snapshotHiddenSize(repoDir, meta.SHA),
+		RepoInfo:     body,
+	}
+	if err := WritePin(opts.ModelDir, pin); err != nil {
+		return Pin{}, err
+	}
+	return pin, nil
+}
+
+// snapshotHiddenSize reads hidden_size from the downloaded config.json.
+//
+// This is the same quantity New cross-checks against embedding_dimensions via
+// the loaded model's Config.HiddenSize, so recording it introduces no second
+// notion of width. Failure returns 0: the value is only used to print a helpful
+// default, and a download must not fail because of it.
+func snapshotHiddenSize(repoDir, commitHash string) int {
+	// #nosec G304 -- path is inside the model directory this call just populated
+	body, err := os.ReadFile(filepath.Join(repoDir, "snapshots", commitHash, "config.json"))
+	if err != nil {
+		return 0
+	}
+	var cfg struct {
+		HiddenSize int `json:"hidden_size"`
+	}
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return 0
+	}
+	return cfg.HiddenSize
 }
 
 // fetchFile downloads one manifest file unless an acceptable copy is already
