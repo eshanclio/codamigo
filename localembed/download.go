@@ -159,10 +159,12 @@ func Download(ctx context.Context, opts DownloadOptions) (*DownloadResult, error
 }
 
 // readDownloadInfo reads and parses the repository info file go-huggingface
-// just wrote for rev, returning the resolved commit hash and the verbatim
-// body. Reading the file directly rather than calling repo.Info() avoids a nil
-// dereference nilaway would reject, and keeps the body byte-exact for the shim
-// to replay later.
+// just wrote for rev, returning the resolved commit hash and the raw body as
+// read from disk. Reading the file directly rather than calling repo.Info()
+// avoids a nil dereference nilaway would reject. The body is what becomes the
+// pin's RepoInfo; note that WritePin's json.Marshal compacts and HTML-escapes
+// it, so what the shim later replays is semantically equivalent, not
+// byte-identical, to what is read here.
 func readDownloadInfo(modelDir string, m Model, rev string) (hash string, body []byte, err error) {
 	repoDir := filepath.Join(modelDir, flatRepoDir(m.RepoID))
 	infoPath := filepath.Join(repoDir, "info", rev)

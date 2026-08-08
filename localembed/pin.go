@@ -2,6 +2,7 @@ package localembed
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,12 +17,13 @@ const pinFileName = "codamigo-pin.json"
 // Pin records the exact upstream revision a model directory holds, so loading
 // the model needs no network round trip to discover it.
 //
-// RepoInfo is the verbatim RepoInfo JSON as it arrived from HuggingFace. It is
-// kept byte-for-byte because [startInfoShim] serves it straight back to
-// go-huggingface, which must be able to unmarshal it into its own hub.RepoInfo.
-// Storing our own copy is not redundancy: go-huggingface's LockedDownload
-// deletes its info/<revision> file before re-fetching it, so a shim reading
-// that file would be reading something that had just been unlinked.
+// RepoInfo is the RepoInfo JSON as it arrived from HuggingFace, semantically
+// preserved (compacted, HTML-escaped by json.Marshal) rather than byte-for-byte,
+// because [startInfoShim] serves it straight back to go-huggingface, which must
+// be able to unmarshal it into its own hub.RepoInfo. Storing our own copy is not
+// redundancy: go-huggingface's LockedDownload deletes its info/<revision> file
+// before re-fetching it, so a shim reading that file would be reading something
+// that had just been unlinked.
 type Pin struct {
 	RepoID string `json:"repo_id"`
 	// CommitHash is the resolved 40-hex git commit the snapshot directory is
@@ -48,7 +50,7 @@ func PinPath(modelDir string) string {
 // WritePin writes the pin file, replacing any existing one.
 func WritePin(modelDir string, p Pin) error {
 	if modelDir == "" {
-		return fmt.Errorf("model directory must not be empty")
+		return errors.New("model directory must not be empty")
 	}
 	body, err := json.Marshal(p)
 	if err != nil {

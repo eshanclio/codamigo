@@ -46,7 +46,9 @@ func TestPin_RoundTrip(t *testing.T) {
 	if !got.ResolvedAt.Equal(want.ResolvedAt) {
 		t.Errorf("ResolvedAt = %v, want %v", got.ResolvedAt, want.ResolvedAt)
 	}
-	// RepoInfo must survive byte-for-byte: the shim serves it verbatim.
+	// RepoInfo must round-trip: this fixture is already compact JSON with no
+	// characters json.Marshal would HTML-escape, so byte-for-byte is the
+	// expected outcome here (see the RepoInfo field doc for the general case).
 	if string(got.RepoInfo) != string(want.RepoInfo) {
 		t.Errorf("RepoInfo = %s, want %s", got.RepoInfo, want.RepoInfo)
 	}

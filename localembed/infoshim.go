@@ -2,7 +2,6 @@ package localembed
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -82,11 +81,11 @@ func startInfoShim(m Model, p Pin) (*infoShim, error) {
 	}
 	go func() {
 		defer close(s.done)
-		if err := s.srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			// Nothing useful to do here: a failed Serve surfaces as the load
-			// error the caller is already about to report.
-			_ = err
-		}
+		// Discarded deliberately. The one failure worth reporting is a bind
+		// failure, and net.Listen above has already returned it; every other
+		// Serve error — including the expected ErrServerClosed from Close —
+		// surfaces as the load error the caller is about to report anyway.
+		_ = s.srv.Serve(listener)
 	}()
 	return s, nil
 }
@@ -135,12 +134,11 @@ func (s *infoShim) missedPaths() []string {
 	return append([]string(nil), s.missed...)
 }
 
-// Close stops the server and waits for its goroutine to finish.
+// Close stops the server and waits for its goroutine to finish. The returned
+// error is whatever closing the listener reported; http.Server.Close never
+// reports ErrServerClosed, so there is nothing to filter out.
 func (s *infoShim) Close() error {
 	err := s.srv.Close()
 	<-s.done
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	return err
 }

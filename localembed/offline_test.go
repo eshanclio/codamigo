@@ -3,6 +3,7 @@ package localembed_test
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,15 +31,27 @@ func deadEndpoint(t *testing.T) string {
 // proves nothing but the local shim was consulted. Before the pin-and-shim
 // change this failed with "config.json is missing or failed to download from
 // repo" even though every file was already on disk.
+//
+// This test actually loads the model to completion (unlike its siblings in
+// this file, which fail before backend selection), so it runs under both the
+// test-race and bench-localembed CI jobs. It uses Backend: "auto" rather than
+// "go" for the same reason newTestEmbedder skips "go" under -race: the pure-Go
+// backend trips checkptr inside GoMLX's matmul, which aborts the whole test
+// binary under -race. It also quiets the backend-selection log the same way
+// newTestEmbedder does, since it is the only test in this file that reaches it.
 func TestNew_LoadsWithoutNetwork(t *testing.T) {
 	const model = "bge-small-en-v1.5"
 	root := modelsRoot(t, model) // skips when the model is not downloaded
 	t.Setenv("HF_ENDPOINT", deadEndpoint(t))
 
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	emb, err := localembed.New(localembed.Options{
 		Model:      model,
 		ModelsRoot: root,
-		Backend:    "go",
+		Backend:    "auto",
 	})
 	if err != nil {
 		t.Fatalf("New with no reachable hub: %v", err)
@@ -70,6 +83,101 @@ func TestNew_UnpinnedWithoutPinIsActionable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "download-model") {
 		t.Errorf("error %q does not tell the user how to recover", err)
+	}
+}
+
+// TestNew_FileOutsideTheSnapshotIsNamed covers the shim-404 translation in New.
+//
+// standardManifest is deliberately a subset of what some repositories publish,
+// so a model can pass MissingFiles and still have LoadStore ask for a file the
+// local snapshot never had — a shard of a sharded model, for instance.
+// LoadStore reaches that file through repo.IterFileNames, which iterates the
+// pin's repo_info siblings, so naming an absent .safetensors sibling reproduces
+// the case exactly. Without the translation the user sees a raw HTTP 404
+// quoting a 127.0.0.1:<port> loopback URL.
+//
+// This is the one branch that cannot be reached hermetically. Every file
+// LoadModel probes is in standardManifest, so MissingFiles rejects its absence
+// before the shim is ever consulted; the only requester of a non-manifest file
+// is LoadStore, which runs after GetTokenizer and backend selection and so
+// needs a real tokenizer and real weights. Rather than assert against a
+// synthetic model that never gets that far, this builds a temp models root that
+// symlinks the real snapshot — read-only — and adds the missing sibling there.
+func TestNew_FileOutsideTheSnapshotIsNamed(t *testing.T) {
+	const (
+		model      = "bge-small-en-v1.5"
+		repoID     = "BAAI/bge-small-en-v1.5"
+		flatRepo   = "models--BAAI--bge-small-en-v1.5"
+		absentFile = "model-00002-of-00002.safetensors"
+	)
+	realRoot := modelsRoot(t, model) // skips when the model is not downloaded
+	descriptor, err := localembed.Lookup(model)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	revision := descriptor.Revision
+
+	// A models root of our own, so the pin we are about to write cannot land in
+	// the user's real cache. The snapshot is a symlink to the real one: the test
+	// only ever reads it, and copying 133 MB per run would be gratuitous.
+	root := t.TempDir()
+	repoDir := filepath.Join(root, model, flatRepo)
+	for _, d := range []string{"info", "blobs", "snapshots"} {
+		if err := os.MkdirAll(filepath.Join(repoDir, d), 0o750); err != nil {
+			t.Fatalf("MkdirAll %s: %v", d, err)
+		}
+	}
+	realSnapshot := filepath.Join(realRoot, model, flatRepo, "snapshots", revision)
+	if err := os.Symlink(realSnapshot, filepath.Join(repoDir, "snapshots", revision)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// The siblings list must be faithful for the files the loader resolves
+	// through it — GetTokenizer looks tokenizer.json up in the repo index, not on
+	// disk — so it carries the real manifest plus the one shard that is absent.
+	// That absent shard is what LoadStore reaches for and the shim refuses.
+	siblings := make([]string, 0, len(descriptor.Files)+1)
+	for _, f := range descriptor.Files {
+		siblings = append(siblings, `{"rfilename":"`+f.Path+`"}`)
+	}
+	siblings = append(siblings, `{"rfilename":"`+absentFile+`"}`)
+	repoInfo := `{"id":"` + repoID + `","sha":"` + revision +
+		`","siblings":[` + strings.Join(siblings, ",") + `]}`
+	if err := localembed.WritePin(filepath.Join(root, model), localembed.Pin{
+		RepoID:       repoID,
+		CommitHash:   revision,
+		ResolvedFrom: revision,
+		RepoInfo:     json.RawMessage(repoInfo),
+	}); err != nil {
+		t.Fatalf("WritePin: %v", err)
+	}
+
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	t.Setenv("HF_ENDPOINT", deadEndpoint(t))
+	emb, err := localembed.New(localembed.Options{
+		Model:      model,
+		ModelsRoot: root,
+		Backend:    "auto",
+	})
+	if err == nil {
+		_ = emb.Close()
+		t.Fatal("New succeeded even though a sibling is absent from the snapshot")
+	}
+	if !errors.Is(err, localembed.ErrModelNotDownloaded) {
+		t.Errorf("New error = %v, want it to wrap ErrModelNotDownloaded", err)
+	}
+	if !strings.Contains(err.Error(), absentFile) {
+		t.Errorf("error %q does not name the absent file %q", err, absentFile)
+	}
+	if !strings.Contains(err.Error(), "download-model") {
+		t.Errorf("error %q does not tell the user how to recover", err)
+	}
+	// The whole point of the translation: no loopback URL in the user's face.
+	if strings.Contains(err.Error(), "127.0.0.1") {
+		t.Errorf("error %q leaks the shim's loopback address", err)
 	}
 }
 

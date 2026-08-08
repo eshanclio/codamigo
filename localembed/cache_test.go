@@ -337,8 +337,15 @@ func TestSupersededSnapshots_SharedBlobsNotCounted(t *testing.T) {
 
 	// The kept snapshot's weights did not change (still points at the shared
 	// blob) but its config did (points at a blob the stale snapshot never
-	// referenced).
-	if err := os.Symlink(sharedBlob, filepath.Join(keepDir, "model.bin")); err != nil {
+	// referenced). This link uses a relative target, matching what
+	// go-huggingface actually writes (e.g. "../../blobs/<etag>"), so
+	// resolveSymlink's relative-path branch is exercised too, not just the
+	// absolute-path one the other three links below use.
+	sharedBlobRel, err := filepath.Rel(keepDir, sharedBlob)
+	if err != nil {
+		t.Fatalf("Rel: %v", err)
+	}
+	if err := os.Symlink(sharedBlobRel, filepath.Join(keepDir, "model.bin")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	if err := os.Symlink(keepOnlyBlob, filepath.Join(keepDir, "config.json")); err != nil {

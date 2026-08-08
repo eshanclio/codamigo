@@ -194,6 +194,19 @@ func New(opts Options) (*Embedder, error) {
 	}
 	defer func() { _ = shim.Close() }()
 
+	// loadErr wraps a failure from any call below that can reach *hub.Repo. If
+	// the shim refused a request, that is almost always the real cause: a file
+	// outside standardManifest that the local snapshot never had. Naming it beats
+	// surfacing the underlying HTTP error, which just says the URL 404ed.
+	loadErr := func(err error, fallback string) error {
+		if missed := shim.missedPaths(); len(missed) > 0 {
+			return fmt.Errorf("%w: %s is not in the local snapshot for %s. "+
+				"Run: codamigo download-model --model %s",
+				ErrModelNotDownloaded, missed[0], descriptor.DisplayName(), descriptor.DisplayName())
+		}
+		return fmt.Errorf("%s: %w", fallback, err)
+	}
+
 	repo := hub.New(descriptor.RepoID).
 		WithCacheDir(modelDir).
 		WithRevision(descriptor.Revision).
@@ -207,15 +220,7 @@ func New(opts Options) (*Embedder, error) {
 
 	hfModel, err := transformer.LoadModel(repo)
 	if err != nil {
-		// A file the manifest does not cover — standardManifest is a subset of
-		// what some repositories publish — reaches the shim as a request it
-		// refuses. Say which file, rather than surfacing an HTTP error.
-		if missed := shim.missedPaths(); len(missed) > 0 {
-			return nil, fmt.Errorf("%w: %s is not in the local snapshot for %s. "+
-				"Run: codamigo download-model --model %s",
-				ErrModelNotDownloaded, missed[0], descriptor.DisplayName(), descriptor.DisplayName())
-		}
-		return nil, fmt.Errorf("loading %s: %w", descriptor.DisplayName(), err)
+		return nil, loadErr(err, fmt.Sprintf("loading %s", descriptor.DisplayName()))
 	}
 	dim := hfModel.Config.HiddenSize
 	if err := checkDimensions(descriptor, opts.Dimensions, dim); err != nil {
@@ -224,7 +229,7 @@ func New(opts Options) (*Embedder, error) {
 
 	tokenizer, err := hfModel.GetTokenizer()
 	if err != nil {
-		return nil, fmt.Errorf("loading tokenizer for %s: %w", descriptor.DisplayName(), err)
+		return nil, loadErr(err, fmt.Sprintf("loading tokenizer for %s", descriptor.DisplayName()))
 	}
 	padID, err := tokenizer.SpecialTokenID(api.TokPad)
 	if err != nil {
@@ -258,7 +263,7 @@ func New(opts Options) (*Embedder, error) {
 	}
 	if err := hfModel.LoadStore(backend, store); err != nil {
 		cleanup()
-		return nil, fmt.Errorf("loading weights for %s onto %s: %w", descriptor.DisplayName(), backendName, err)
+		return nil, loadErr(err, fmt.Sprintf("loading weights for %s onto %s", descriptor.DisplayName(), backendName))
 	}
 
 	// seqLen is derived inside the graph from the pad token rather than passed as
